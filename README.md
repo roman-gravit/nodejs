@@ -23,7 +23,7 @@ The following variables may appear to be global but are not. They exist only in 
 
  - **exports**
 
- - **module**
+ - **module:** In each module, the module free variable is a reference to the object representing the current module. For convenience, module.exports is also accessible via the exports module-global. module is not actually a global but rather local to each module.
 
  - **require()**
 
