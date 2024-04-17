@@ -124,6 +124,28 @@ It provides mechanisms to:
 
  - Add additional request processing "middleware" at any point within the request handling pipeline.
 
+https://expressjs.com/en/4x/api.html
+
+
+##   Using template engines with Express
+
+A template engine enables you to use static template files in your application. At runtime, the template engine replaces variables 
+in a template file with actual values, and transforms the template into an HTML file sent to the client. 
+This approach makes it easier to design an HTML page.
+
+Some popular template engines that work with Express are *Pug*, *Mustache*, and *EJS*. 
+The Express application generator uses Jade as its default, but it also supports several others.
+
+Steps to implement:
+
+- install needed package
+
+- load the template engine module in your app:  ```app.set('view engine', 'ejs')```
+
+- Create a EJS template file named index.ejs
+
+- Then create a route to render the index.ejs file. 
+
 
 ##  Global Node objects 
 
