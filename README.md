@@ -38,48 +38,61 @@ Every npm package and Node.js project has a package.json file with metadata for 
 The file resides in the root directory of every Node.js package and appears after running the npm init command.
 The package.json file contains descriptive and functional metadata about a project, such as a name, version, and dependencies. 
 The file provides the npm package manager with various information to help identify the project and handle dependencies.
+
 Example:
-	```
-	{
-		"name": "example-name",
-		"version": "1.0.0",
-		"license": "MIT",
-		"description": "An example NodeJS project",
-		"keywords": ["example", "learning", "kb"],
-		"author": "Bob",
-		"contributors": [{
-			"name": "Alice",
-			"email": "alice@example.com"
-		}],
 
-		// The main property points to the project's entry point. When a Node.js application imports the package through a require statement, 
-		// the package.json file uses the exports from the file in the main property and returns it to the application.
-		// If a package.json file does not have the main property, the value defaults to index.js.
-		"main": "app.js",
+```
+{
+	"name": "example-name",
+	
+	"version": "1.0.0",
+	
+	"license": "MIT",
+	
+	"description": "An example NodeJS project",
+		
+	"keywords": ["example", "learning", "kb"],
+	
+	"author": "Bob",
+	
+	"contributors": [{
+		"name": "Alice",
+		"email": "alice@example.com"
+	}],
 
-		// The scripts property in a package.json file contains commands that run at various times in the package lifecycle. 
-		// The key-value pairs have the script name and the corresponding user-made script or command to execute.
-		// To run scripts defined in the scripts property, use the default npm run command: npm run <script name>
-		"scripts": {
-			"start": "node index.js",
-			"dev": "nodemon"
-		},
+	// The main property points to the project's entry point. When a Node.js application imports the package 
+	// through a require statement, the package.json file uses the exports from the file in the main property 
+	// and returns it to the application. If a package.json file does not have the main property, the value 
+	// defaults to index.js.
+	//
+	"main": "app.js",
 
-		// The dependencies property is an essential field in a package.json file. 
-		// The section maps production-level dependent packages and their versions used in the project.
-		"dependencies": {
-			"express": "^4.1.4",
-			"compression": "~1.3.2"
-		},
+	// The scripts property in a package.json file contains commands that run at various times in the package lifecycle. 
+	// The key-value pairs have the script name and the corresponding user-made script or command to execute.
+	// To run scripts defined in the scripts property, use the default npm run command: npm run <script name>
+	//
+	"scripts": {
+		"start": "node index.js",
+		"dev": "nodemon"
+	},
 
-		// The devDependencies property defines the package dependencies necessary for the development process. 
-		// The development dependencies help other developers copy the build steps.
-		// Use devDependencies to list unnecessary packages for production 
-		"devDependencies": {
-			"nodemon": "^1.18.10"
-		}
+	// The dependencies property is an essential field in a package.json file. 
+	// The section maps production-level dependent packages and their versions used in the project.
+	//
+	"dependencies": {
+		"express": "^4.1.4",
+		"compression": "~1.3.2"
+	},
+
+	// The devDependencies property defines the package dependencies necessary for the development process. 
+	// The development dependencies help other developers copy the build steps.
+	// Use devDependencies to list unnecessary packages for production 
+	//
+	"devDependencies": {
+		"nodemon": "^1.18.10"
 	}
-	```
+}
+```
 
 ##   *package-lock.json*
 
