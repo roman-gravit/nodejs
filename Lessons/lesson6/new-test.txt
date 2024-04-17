@@ -1,0 +1,3852 @@
+
+---CHUNK START---
+The node:stream module is useful for creating new types of stream instances. It is usually not necessary to use the node:stream module to consume streams.
+
+Organization of this document#
+This document contains two primary sections and a third section for notes. The first section explains how to use existing streams within an application. The second section explains how to create new types of streams.
+
+Types of streams#
+There are four fundamental stream types within Node.js:
+
+Writable: streams to which data can be written (for example, fs.createWriteStream()).
+Readable: streams from which data can be read (for example, fs.createReadStream()).
+Duplex: streams that are both Readable and Writable (for example, net.Socket).
+Transform: Duplex streams that can modify or transform the data as it is written and read (for example, zlib.createDeflate()).
+Additionally, this module includes the utility functions stream.pipeline(), stream.finished(), stream.Readable.from() and stream.addAbortSignal().
+
+Streams Promises API#
+Added in: v15.0.0
+The stream/promises API provides an alternative set of asynchronous utility functions for streams that return Promise objects rather than using callbacks. The API is accessible via require('node:stream/promises') or require('node:stream').promises.
+
+stream.pipeline(source[, ...transforms], destination[, options])#
+stream.pipeline(streams[, options])#
+Added in: v15.0.0
+streams <Stream[]> | <Iterable[]> | <AsyncIterable[]> | <Function[]>
+source <Stream> | <Iterable> | <AsyncIterable> | <Function>
+Returns: <Promise> | <AsyncIterable>
+...transforms <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+destination <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+options <Object>
+signal <AbortSignal>
+end <boolean>
+Returns: <Promise> Fulfills when the pipeline is complete.
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+To use an AbortSignal, pass it inside an options object, as the last argument. When the signal is aborted, destroy will be called on the underlying pipeline, with an AbortError.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  const ac = new AbortController();
+  const signal = ac.signal;
+
+  setImmediate(() => ac.abort());
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+    { signal },
+  );
+}
+
+run().catch(console.error); // AbortErrorCOPY
+The pipeline API also supports async generators:
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('lowercase.txt'),
+    async function* (source, { signal }) {
+      source.setEncoding('utf8');  // Work with strings rather than `Buffer`s.
+      for await (const chunk of source) {
+        yield await processChunk(chunk, { signal });
+      }
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+Remember to handle the signal argument passed into the async generator. Especially in the case where the async generator is the source for the pipeline (i.e. first argument) or the pipeline will never complete.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    async function* ({ signal }) {
+      await someLongRunningfn({ signal });
+      yield 'asd';
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+The pipeline API provides callback version:
+
+stream.finished(stream[, options])#
+Added in: v15.0.0
+stream <Stream>
+options <Object>
+error <boolean> | <undefined>
+readable <boolean> | <undefined>
+writable <boolean> | <undefined>
+signal: <AbortSignal> | <undefined>
+Returns: <Promise> Fulfills when the stream is no longer readable or writable.
+const { finished } = require('node:stream/promises');
+const fs = require('node:fs');
+
+const rs = fs.createReadStream('archive.tar');
+
+async function run() {
+  await finished(rs);
+  console.log('Stream is done reading.');
+}
+
+run().catch(console.error);
+rs.resume(); // Drain the stream.COPY
+The finished API also provides a callback version.
+
+Object mode#
+All streams created by Node.js APIs operate exclusively on strings and Buffer (or Uint8Array) objects. It is possible, however, for stream implementations to work with other types of JavaScript values (with the exception of null, which serves a special purpose within streams). Such streams are considered to operate in "object mode".
+
+Stream instances are switched into object mode using the objectMode option when the stream is created. Attempting to switch an existing stream into object mode is not safe.
+
+Buffering#
+Both Writable and Readable streams will store data in an internal buffer.
+
+The amount of data potentially buffered depends on the highWaterMark option passed into the stream's constructor. For normal streams, the highWaterMark option specifies a total number of bytes. For streams operating in object mode, the highWaterMark specifies a total number of objects.
+
+Data is buffered in Readable streams when the implementation calls stream.push(chunk). If the consumer of the Stream does not call stream.read(), the data will sit in the internal queue until it is consumed.
+
+Once the total size of the internal read buffer reaches the threshold specified by highWaterMark, the stream will temporarily stop reading data from the underlying resource until the data currently buffered can be consumed (that is, the stream will stop calling the internal readable._read() method that is used to fill the read buffer).
+
+Data is buffered in Writable streams when the writable.write(chunk) method is called repeatedly. While the total size of the internal write buffer is below the threshold set by highWaterMark, calls to writable.write() will return true. Once the size of the internal buffer reaches or exceeds the highWaterMark, false will be returned.
+
+A key goal of the stream API, particularly the stream.pipe() method, is to limit the buffering of data to acceptable levels such that sources and destinations of differing speeds will not overwhelm the available memory.
+
+The highWaterMark option is a threshold, not a limit: it dictates the amount of data that a stream buffers before it stops asking for more data. It does not enforce a strict memory limitation in general. Specific stream implementations may choose to enforce stricter limits but doing so is optional.
+
+Because Duplex and Transform streams are both Readable and Writable, each maintains two separate internal buffers used for reading and writing, allowing each side to operate independently of the other while maintaining an appropriate and efficient flow of data. For example, net.Socket instances are Duplex streams whose Readable side allows consumption of data received from the socket and whose Writable side allows writing data to the socket. Because data may be written to the socket at a faster or slower rate than data is received, each side should operate (and buffer) independently of the other.
+
+The mechanics of the internal buffering are an internal implementation detail and may be changed at any time. However, for certain advanced implementations, the internal buffers can be retrieved using writable.writableBuffer or readable.readableBuffer. Use of these undocumented properties is discouraged.
+
+API for stream consumers#
+Almost all Node.js applications, no matter how simple, use streams in some manner. The following is an example of using streams in a Node.js application that implements an HTTP server:
+
+const http = require('node:http');
+
+const server = http.createServer((req, res) => {
+  // `req` is an http.IncomingMessage, which is a readable stream.
+  // `res` is an http.ServerResponse, which is a writable stream.
+
+  let body = '';
+  // Get the data as utf8 strings.
+  // If an encoding is not set, Buffer objects will be received.
+  req.setEncoding('utf8');
+
+  // Readable streams emit 'data' events once a listener is added.
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+
+  // The 'end' event indicates that the entire body has been received.
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      // Write back something interesting to the user:
+      res.write(typeof data);
+      res.end();
+    } catch (er) {
+      // uh oh! bad json!
+      res.statusCode = 400;
+      return res.end(`error: ${er.message}`);
+    }
+  });
+});
+
+server.listen(1337);
+
+// $ curl localhost:1337 -d "{}"
+// object
+// $ curl localhost:1337 -d "\"foo\""
+// string
+// $ curl localhost:1337 -d "not json"
+// error: Unexpected token 'o', "not json" is not valid JSON COPY
+Writable streams (such as res in the example) expose methods such as write() and end() that are used to write data onto the stream.
+
+Readable streams use the EventEmitter API for notifying application code when data is available to be read off the stream. That available data can be read from the stream in multiple ways.
+
+Both Writable and Readable streams use the EventEmitter API in various ways to communicate the current state of the stream.
+
+Duplex and Transform streams are both Writable and Readable.
+
+Applications that are either writing data to or consuming data from a stream are not required to implement the stream interfaces directly and will generally have no reason to call require('node:stream').
+
+Developers wishing to implement new types of streams should refer to the section API for stream implementers.
+
+Writable streams#
+Writable streams are an abstraction for a destination to which data is written.
+
+Examples of Writable streams include:
+
+HTTP requests, on the client
+HTTP responses, on the server
+fs write streams
+zlib streams
+crypto streams
+TCP sockets
+child process stdin
+process.stdout, process.stderr
+Some of these examples are actually Duplex streams that implement the Writable interface.
+
+All Writable streams implement the interface defined by the stream.Writable class.
+
+While specific instances of Writable streams may differ in various ways, all Writable streams follow the same fundamental usage pattern as illustrated in the example below:
+
+const myStream = getWritableStreamSomehow();
+myStream.write('some data');
+myStream.write('some more data');
+myStream.end('done writing data'); COPY
+Class: stream.Writable#
+Added in: v0.9.4
+Event: 'close'#
+History
+The 'close' event is emitted when the stream and any of its underlying resources (a file descriptor, for example) have been closed. The event indicates that no more events will be emitted, and no further computation will occur.
+
+A Writable stream will always emit the 'close' event if it is created with the emitClose option.
+
+Event: 'drain'
+The node:stream module is useful for creating new types of stream instances. It is usually not necessary to use the node:stream module to consume streams.
+
+Organization of this document#
+This document contains two primary sections and a third section for notes. The first section explains how to use existing streams within an application. The second section explains how to create new types of streams.
+
+Types of streams#
+There are four fundamental stream types within Node.js:
+
+Writable: streams to which data can be written (for example, fs.createWriteStream()).
+Readable: streams from which data can be read (for example, fs.createReadStream()).
+Duplex: streams that are both Readable and Writable (for example, net.Socket).
+Transform: Duplex streams that can modify or transform the data as it is written and read (for example, zlib.createDeflate()).
+Additionally, this module includes the utility functions stream.pipeline(), stream.finished(), stream.Readable.from() and stream.addAbortSignal().
+
+Streams Promises API#
+Added in: v15.0.0
+The stream/promises API provides an alternative set of asynchronous utility functions for streams that return Promise objects rather than using callbacks. The API is accessible via require('node:stream/promises') or require('node:stream').promises.
+
+stream.pipeline(source[, ...transforms], destination[, options])#
+stream.pipeline(streams[, options])#
+Added in: v15.0.0
+streams <Stream[]> | <Iterable[]> | <AsyncIterable[]> | <Function[]>
+source <Stream> | <Iterable> | <AsyncIterable> | <Function>
+Returns: <Promise> | <AsyncIterable>
+...transforms <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+destination <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+options <Object>
+signal <AbortSignal>
+end <boolean>
+Returns: <Promise> Fulfills when the pipeline is complete.
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+To use an AbortSignal, pass it inside an options object, as the last argument. When the signal is aborted, destroy will be called on the underlying pipeline, with an AbortError.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  const ac = new AbortController();
+  const signal = ac.signal;
+
+  setImmediate(() => ac.abort());
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+    { signal },
+  );
+}
+
+run().catch(console.error); // AbortErrorCOPY
+The pipeline API also supports async generators:
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('lowercase.txt'),
+    async function* (source, { signal }) {
+      source.setEncoding('utf8');  // Work with strings rather than `Buffer`s.
+      for await (const chunk of source) {
+        yield await processChunk(chunk, { signal });
+      }
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+Remember to handle the signal argument passed into the async generator. Especially in the case where the async generator is the source for the pipeline (i.e. first argument) or the pipeline will never complete.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    async function* ({ signal }) {
+      await someLongRunningfn({ signal });
+      yield 'asd';
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+The pipeline API provides callback version:
+
+stream.finished(stream[, options])#
+Added in: v15.0.0
+stream <Stream>
+options <Object>
+error <boolean> | <undefined>
+readable <boolean> | <undefined>
+writable <boolean> | <undefined>
+signal: <AbortSignal> | <undefined>
+Returns: <Promise> Fulfills when the stream is no longer readable or writable.
+const { finished } = require('node:stream/promises');
+const fs = require('node:fs');
+
+const rs = fs.createReadStream('archive.tar');
+
+async function run() {
+  await finished(rs);
+  console.log('Stream is done reading.');
+}
+
+run().catch(console.error);
+rs.resume(); // Drain the stream.COPY
+The finished API also provides a callback version.
+
+Object mode#
+All streams created by Node.js APIs operate exclusively on strings and Buffer (or Uint8Array) objects. It is possible, however, for stream implementations to work with other types of JavaScript values (with the exception of null, which serves a special purpose within streams). Such streams are considered to operate in "object mode".
+
+Stream instances are switched into object mode using the objectMode option when the stream is created. Attempting to switch an existing stream into object mode is not safe.
+
+Buffering#
+Both Writable and Readable streams will store data in an internal buffer.
+
+The amount of data potentially buffered depends on the highWaterMark option passed into the stream's constructor. For normal streams, the highWaterMark option specifies a total number of bytes. For streams operating in object mode, the highWaterMark specifies a total number of objects.
+
+Data is buffered in Readable streams when the implementation calls stream.push(chunk). If the consumer of the Stream does not call stream.read(), the data will sit in the internal queue until it is consumed.
+
+Once the total size of the internal read buffer reaches the threshold specified by highWaterMark, the stream will temporarily stop reading data from the underlying resource until the data currently buffered can be consumed (that is, the stream will stop calling the internal readable._read() method that is used to fill the read buffer).
+
+Data is buffered in Writable streams when the writable.write(chunk) method is called repeatedly. While the total size of the internal write buffer is below the threshold set by highWaterMark, calls to writable.write() will return true. Once the size of the internal buffer reaches or exceeds the highWaterMark, false will be returned.
+
+A key goal of the stream API, particularly the stream.pipe() method, is to limit the buffering of data to acceptable levels such that sources and destinations of differing speeds will not overwhelm the available memory.
+
+The highWaterMark option is a threshold, not a limit: it dictates the amount of data that a stream buffers before it stops asking for more data. It does not enforce a strict memory limitation in general. Specific stream implementations may choose to enforce stricter limits but doing so is optional.
+
+Because Duplex and Transform streams are both Readable and Writable, each maintains two separate internal buffers used for reading and writing, allowing each side to operate independently of the other while maintaining an appropriate and efficient flow of data. For example, net.Socket instances are Duplex streams whose Readable side allows consumption of data received from the socket and whose Writable side allows writing data to the socket. Because data may be written to the socket at a faster or slower rate than data is received, each side should operate (and buffer) independently of the other.
+
+The mechanics of the internal buffering are an internal implementation detail and may be changed at any time. However, for certain advanced implementations, the internal buffers can be retrieved using writable.writableBuffer or readable.readableBuffer. Use of these undocumented properties is discouraged.
+
+API for stream consumers#
+Almost all Node.js applications, no matter how simple, use streams in some manner. The following is an example of using streams in a Node.js application that implements an HTTP server:
+
+const http = require('node:http');
+
+const server = http.createServer((req, res) => {
+  // `req` is an http.IncomingMessage, which is a readable stream.
+  // `res` is an http.ServerResponse, which is a writable stream.
+
+  let body = '';
+  // Get the data as utf8 strings.
+  // If an encoding is not set, Buffer objects will be received.
+  req.setEncoding('utf8');
+
+  // Readable streams emit 'data' events once a listener is added.
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+
+  // The 'end' event indicates that the entire body has been received.
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      // Write back something interesting to the user:
+      res.write(typeof data);
+      res.end();
+    } catch (er) {
+      // uh oh! bad json!
+      res.statusCode = 400;
+      return res.end(`error: ${er.message}`);
+    }
+  });
+});
+
+server.listen(1337);
+
+// $ curl localhost:1337 -d "{}"
+// object
+// $ curl localhost:1337 -d "\"foo\""
+// string
+// $ curl localhost:1337 -d "not json"
+// error: Unexpected token 'o', "not json" is not valid JSON COPY
+Writable streams (such as res in the example) expose methods such as write() and end() that are used to write data onto the stream.
+
+Readable streams use the EventEmitter API for notifying application code when data is available to be read off the stream. That available data can be read from the stream in multiple ways.
+
+Both Writable and Readable streams use the EventEmitter API in various ways to communicate the current state of the stream.
+
+Duplex and Transform streams are both Writable and Readable.
+
+Applications that are either writing data to or consuming data from a stream are not required to implement the stream interfaces directly and will generally have no reason to call require('node:stream').
+
+Developers wishing to implement new types of streams should refer to the section API for stream implementers.
+
+Writable streams#
+Writable streams are an abstraction for a destination to which data is written.
+
+Examples of Writable streams include:
+
+HTTP requests, on the client
+HTTP responses, on the server
+fs write streams
+zlib streams
+crypto streams
+TCP sockets
+child process stdin
+process.stdout, process.stderr
+Some of these examples are actually Duplex streams that implement the Writable interface.
+
+All Writable streams implement the interface defined by the stream.Writable class.
+
+While specific instances of Writable streams may differ in various ways, all Writable streams follow the same fundamental usage pattern as illustrated in the example below:
+
+const myStream = getWritableStreamSomehow();
+myStream.write('some data');
+myStream.write('some more data');
+myStream.end('done writing data'); COPY
+Class: stream.Writable#
+Added in: v0.9.4
+Event: 'close'#
+History
+The 'close' event is emitted when the stream and any of its underlying resources (a file descriptor, for example) have been closed. The event indicates that no more events will be emitted, and no further computation will occur.
+
+A Writable stream will always emit the 'close' event if it is created with the emitClose option.
+
+Event: 'drain'
+The node:stream module is useful for creating new types of stream instances. It is usually not necessary to use the node:stream module to consume streams.
+
+Organization of this document#
+This document contains two primary sections and a third section for notes. The first section explains how to use existing streams within an application. The second section explains how to create new types of streams.
+
+Types of streams#
+There are four fundamental stream types within Node.js:
+
+Writable: streams to which data can be written (for example, fs.createWriteStream()).
+Readable: streams from which data can be read (for example, fs.createReadStream()).
+Duplex: streams that are both Readable and Writable (for example, net.Socket).
+Transform: Duplex streams that can modify or transform the data as it is written and read (for example, zlib.createDeflate()).
+Additionally, this module includes the utility functions stream.pipeline(), stream.finished(), stream.Readable.from() and stream.addAbortSignal().
+
+Streams Promises API#
+Added in: v15.0.0
+The stream/promises API provides an alternative set of asynchronous utility functions for streams that return Promise objects rather than using callbacks. The API is accessible via require('node:stream/promises') or require('node:stream').promises.
+
+stream.pipeline(source[, ...transforms], destination[, options])#
+stream.pipeline(streams[, options])#
+Added in: v15.0.0
+streams <Stream[]> | <Iterable[]> | <AsyncIterable[]> | <Function[]>
+source <Stream> | <Iterable> | <AsyncIterable> | <Function>
+Returns: <Promise> | <AsyncIterable>
+...transforms <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+destination <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+options <Object>
+signal <AbortSignal>
+end <boolean>
+Returns: <Promise> Fulfills when the pipeline is complete.
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+To use an AbortSignal, pass it inside an options object, as the last argument. When the signal is aborted, destroy will be called on the underlying pipeline, with an AbortError.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  const ac = new AbortController();
+  const signal = ac.signal;
+
+  setImmediate(() => ac.abort());
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+    { signal },
+  );
+}
+
+run().catch(console.error); // AbortErrorCOPY
+The pipeline API also supports async generators:
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('lowercase.txt'),
+    async function* (source, { signal }) {
+      source.setEncoding('utf8');  // Work with strings rather than `Buffer`s.
+      for await (const chunk of source) {
+        yield await processChunk(chunk, { signal });
+      }
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+Remember to handle the signal argument passed into the async generator. Especially in the case where the async generator is the source for the pipeline (i.e. first argument) or the pipeline will never complete.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    async function* ({ signal }) {
+      await someLongRunningfn({ signal });
+      yield 'asd';
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+The pipeline API provides callback version:
+
+stream.finished(stream[, options])#
+Added in: v15.0.0
+stream <Stream>
+options <Object>
+error <boolean> | <undefined>
+readable <boolean> | <undefined>
+writable <boolean> | <undefined>
+signal: <AbortSignal> | <undefined>
+Returns: <Promise> Fulfills when the stream is no longer readable or writable.
+const { finished } = require('node:stream/promises');
+const fs = require('node:fs');
+
+const rs = fs.createReadStream('archive.tar');
+
+async function run() {
+  await finished(rs);
+  console.log('Stream is done reading.');
+}
+
+run().catch(console.error);
+rs.resume(); // Drain the stream.COPY
+The finished API also provides a callback version.
+
+Object mode#
+All streams created by Node.js APIs operate exclusively on strings and Buffer (or Uint8Array) objects. It is possible, however, for stream implementations to work with other types of JavaScript values (with the exception of null, which serves a special purpose within streams). Such streams are considered to operate in "object mode".
+
+Stream instances are switched into object mode using the objectMode option when the stream is created. Attempting to switch an existing stream into object mode is not safe.
+
+Buffering#
+Both Writable and Readable streams will store data in an internal buffer.
+
+The amount of data potentially buffered depends on the highWaterMark option passed into the stream's constructor. For normal streams, the highWaterMark option specifies a total number of bytes. For streams operating in object mode, the highWaterMark specifies a total number of objects.
+
+Data is buffered in Readable streams when the implementation calls stream.push(chunk). If the consumer of the Stream does not call stream.read(), the data will sit in the internal queue until it is consumed.
+
+Once the total size of the internal read buffer reaches the threshold specified by highWaterMark, the stream will temporarily stop reading data from the underlying resource until the data currently buffered can be consumed (that is, the stream will stop calling the internal readable._read() method that is used to fill the read buffer).
+
+Data is buffered in Writable streams when the writable.write(chunk) method is called repeatedly. While the total size of the internal write buffer is below the threshold set by highWaterMark, calls to writable.write() will return true. Once the size of the internal buffer reaches or exceeds the highWaterMark, false will be returned.
+
+A key goal of the stream API, particularly the stream.pipe() method, is to limit the buffering of data to acceptable levels such that sources and destinations of differing speeds will not overwhelm the available memory.
+
+The highWaterMark option is a threshold, not a limit: it dictates the amount of data that a stream buffers before it stops asking for more data. It does not enforce a strict memory limitation in general. Specific stream implementations may choose to enforce stricter limits but doing so is optional.
+
+Because Duplex and Transform streams are both Readable and Writable, each maintains two separate internal buffers used for reading and writing, allowing each side to operate independently of the other while maintaining an appropriate and efficient flow of data. For example, net.Socket instances are Duplex streams whose Readable side allows consumption of data received from the socket and whose Writable side allows writing data to the socket. Because data may be written to the socket at a faster or slower rate than data is received, each side should operate (and buffer) independently of the other.
+
+The mechanics of the internal buffering are an internal implementation detail and may be changed at any time. However, for certain advanced implementations, the internal buffers can be retrieved using writable.writableBuffer or readable.readableBuffer. Use of these undocumented properties is discouraged.
+
+API for stream consumers#
+Almost all Node.js applications, no matter how simple, use streams in some manner. The following is an example of using streams in a Node.js application that implements an HTTP server:
+
+const http = require('node:http');
+
+const server = http.createServer((req, res) => {
+  // `req` is an http.IncomingMessage, which is a readable stream.
+  // `res` is an http.ServerResponse, which is a writable stream.
+
+  let body = '';
+  // Get the data as utf8 strings.
+  // If an encoding is not set, Buffer objects will be received.
+  req.setEncoding('utf8');
+
+  // Readable streams emit 'data' events once a listener is added.
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+
+  // The 'end' event indicates that the entire body has been received.
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      // Write back something interesting to the user:
+      res.write(typeof data);
+      res.end();
+    } catch (er) {
+      // uh oh! bad json!
+      res.statusCode = 400;
+      return res.end(`error: ${er.message}`);
+    }
+  });
+});
+
+server.listen(1337);
+
+// $ curl localhost:1337 -d "{}"
+// object
+// $ curl localhost:1337 -d "\"foo\""
+// string
+// $ curl localhost:1337 -d "not json"
+// error: Unexpected token 'o', "not json" is not valid JSON COPY
+Writable streams (such as res in the example) expose methods such as write() and end() that are used to write data onto the stream.
+
+Readable streams use the EventEmitter API for notifying application code when data is available to be read off the stream. That available data can be read from the stream in multiple ways.
+
+Both Writable and Readable streams use the EventEmitter API in various ways to communicate the current state of the stream.
+
+Duplex and Transform streams are both Writable and Readable.
+
+Applications that are either writing data to or consuming data from a stream are not required to implement the stream interfaces directly and will generally have no reason to call require('node:stream').
+
+Developers wishing to implement new types of streams should refer to the section API for stream implementers.
+
+Writable streams#
+Writable streams are an abstraction for a destination to which data is written.
+
+Examples of Writable streams include:
+
+HTTP requests, on the client
+HTTP responses, on the server
+fs write streams
+zlib streams
+crypto streams
+TCP sockets
+child process stdin
+process.stdout, process.stderr
+Some of these examples are actually Duplex streams that implement the Writable interface.
+
+All Writable streams implement the interface defined by the stream.Writable class.
+
+While specific instances of Writable streams may differ in various ways, all Writable streams follow the same fundamental usage pattern as illustrated in the example below:
+
+const myStream = getWritableStreamSomehow();
+myStream.write('some data');
+myStream.write('some more data');
+myStream.end('done writing data'); COPY
+Class: stream.Writable#
+Added in: v0.9.4
+Event: 'close'#
+History
+The 'close' event is emitted when the stream and any of its underlying resources (a file descriptor, for example) have been closed. The event indicates that no more events will be emitted, and no further computation will occur.
+
+A Writable stream will always emit the 'close' event if it is created with the emitClose option.
+
+Event: 'drain'
+The node:stream module is useful for creating new types of stream instances. It is usually not necessary to use the node:stream module to consume streams.
+
+Organization of this document#
+This document contains two primary sections and a third section for notes. The first section explains how to use existing streams within an application. The second section explains how to create new types of streams.
+
+Types of streams#
+There are four fundamental stream types within Node.js:
+
+Writable: streams to which data can be written (for example, fs.createWriteStream()).
+Readable: streams from which data can be read (for example, fs.createReadStream()).
+Duplex: streams that are both Readable and Writable (for example, net.Socket).
+Transform: Duplex streams that can modify or transform the data as it is written and read (for example, zlib.createDeflate()).
+Additionally, this module includes the utility functions stream.pipeline(), stream.finished(), stream.Readable.from() and stream.addAbortSignal().
+
+Streams Promises API#
+Added in: v15.0.0
+The stream/promises API provides an alternative set of asynchronous utility functions for streams that return Promise objects rather than using callbacks. The API is accessible via require('node:stream/promises') or require('node:stream').promises.
+
+stream.pipeline(source[, ...transforms], destination[, options])#
+stream.pipeline(streams[, options])#
+Added in: v15.0.0
+streams <Stream[]> | <Iterable[]> | <AsyncIterable[]> | <Function[]>
+source <Stream> | <Iterable> | <AsyncIterable> | <Function>
+Returns: <Promise> | <AsyncIterable>
+...transforms <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+destination <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+options <Object>
+signal <AbortSignal>
+end <boolean>
+Returns: <Promise> Fulfills when the pipeline is complete.
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+To use an AbortSignal, pass it inside an options object, as the last argument. When the signal is aborted, destroy will be called on the underlying pipeline, with an AbortError.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  const ac = new AbortController();
+  const signal = ac.signal;
+
+  setImmediate(() => ac.abort());
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+    { signal },
+  );
+}
+
+run().catch(console.error); // AbortErrorCOPY
+The pipeline API also supports async generators:
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('lowercase.txt'),
+    async function* (source, { signal }) {
+      source.setEncoding('utf8');  // Work with strings rather than `Buffer`s.
+      for await (const chunk of source) {
+        yield await processChunk(chunk, { signal });
+      }
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+Remember to handle the signal argument passed into the async generator. Especially in the case where the async generator is the source for the pipeline (i.e. first argument) or the pipeline will never complete.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    async function* ({ signal }) {
+      await someLongRunningfn({ signal });
+      yield 'asd';
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+The pipeline API provides callback version:
+
+stream.finished(stream[, options])#
+Added in: v15.0.0
+stream <Stream>
+options <Object>
+error <boolean> | <undefined>
+readable <boolean> | <undefined>
+writable <boolean> | <undefined>
+signal: <AbortSignal> | <undefined>
+Returns: <Promise> Fulfills when the stream is no longer readable or writable.
+const { finished } = require('node:stream/promises');
+const fs = require('node:fs');
+
+const rs = fs.createReadStream('archive.tar');
+
+async function run() {
+  await finished(rs);
+  console.log('Stream is done reading.');
+}
+
+run().catch(console.error);
+rs.resume(); // Drain the stream.COPY
+The finished API also provides a callback version.
+
+Object mode#
+All streams created by Node.js APIs operate exclusively on strings and Buffer (or Uint8Array) objects. It is possible, however, for stream implementations to work with other types of JavaScript values (with the exception of null, which serves a special purpose within streams). Such streams are considered to operate in "object mode".
+
+Stream instances are switched into object mode using the objectMode option when the stream is created. Attempting to switch an existing stream into object mode is not safe.
+
+Buffering#
+Both Writable and Readable streams will store data in an internal buffer.
+
+The amount of data potentially buffered depends on the highWaterMark option passed into the stream's constructor. For normal streams, the highWaterMark option specifies a total number of bytes. For streams operating in object mode, the highWaterMark specifies a total number of objects.
+
+Data is buffered in Readable streams when the implementation calls stream.push(chunk). If the consumer of the Stream does not call stream.read(), the data will sit in the internal queue until it is consumed.
+
+Once the total size of the internal read buffer reaches the threshold specified by highWaterMark, the stream will temporarily stop reading data from the underlying resource until the data currently buffered can be consumed (that is, the stream will stop calling the internal readable._read() method that is used to fill the read buffer).
+
+Data is buffered in Writable streams when the writable.write(chunk) method is called repeatedly. While the total size of the internal write buffer is below the threshold set by highWaterMark, calls to writable.write() will return true. Once the size of the internal buffer reaches or exceeds the highWaterMark, false will be returned.
+
+A key goal of the stream API, particularly the stream.pipe() method, is to limit the buffering of data to acceptable levels such that sources and destinations of differing speeds will not overwhelm the available memory.
+
+The highWaterMark option is a threshold, not a limit: it dictates the amount of data that a stream buffers before it stops asking for more data. It does not enforce a strict memory limitation in general. Specific stream implementations may choose to enforce stricter limits but doing so is optional.
+
+Because Duplex and Transform streams are both Readable and Writable, each maintains two separate internal buffers used for reading and writing, allowing each side to operate independently of the other while maintaining an appropriate and efficient flow of data. For example, net.Socket instances are Duplex streams whose Readable side allows consumption of data received from the socket and whose Writable side allows writing data to the socket. Because data may be written to the socket at a faster or slower rate than data is received, each side should operate (and buffer) independently of the other.
+
+The mechanics of the internal buffering are an internal implementation detail and may be changed at any time. However, for certain advanced implementations, the internal buffers can be retrieved using writable.writableBuffer or readable.readableBuffer. Use of these undocumented properties is discouraged.
+
+API for stream consumers#
+Almost all Node.js applications, no matter how simple, use streams in some manner. The following is an example of using streams in a Node.js application that implements an HTTP server:
+
+const http = require('node:http');
+
+const server = http.createServer((req, res) => {
+  // `req` is an http.IncomingMessage, which is a readable stream.
+  // `res` is an http.ServerResponse, which is a writable stream.
+
+  let body = '';
+  // Get the data as utf8 strings.
+  // If an encoding is not set, Buffer objects will be received.
+  req.setEncoding('utf8');
+
+  // Readable streams emit 'data' events once a listener is added.
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+
+  // The 'end' event indicates that the entire body has been received.
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      // Write back something interesting to the user:
+      res.write(typeof data);
+      res.end();
+    } catch (er) {
+      // uh oh! bad json!
+      res.statusCode = 400;
+      return res.end(`error: ${er.message}`);
+    }
+  });
+});
+
+server.listen(1337);
+
+// $ curl localhost:1337 -d "{}"
+// object
+// $ curl localhost:1337 -d "\"foo\""
+// string
+// $ curl localhost:1337 -d "not json"
+// error: Unexpected token 'o', "not json" is not valid JSON COPY
+Writable streams (such as res in the example) expose methods such as write() and end() that are used to write data onto the stream.
+
+Readable streams use the EventEmitter API for notifying application code when data is available to be read off the stream. That available data can be read from the stream in multiple ways.
+
+Both Writable and Readable streams use the EventEmitter API in various ways to communicate the current state of the stream.
+
+Duplex and Transform streams are both Writable and Readable.
+
+Applications that are either writing data to or consuming data from a stream are not required to implement the stream interfaces directly and will generally have no reason to call require('node:stream').
+
+Developers wishing to implement new types of streams should refer to the section API for stream implementers.
+
+Writable streams#
+Writable streams are an abstraction for a destination to which data is written.
+
+Examples of Writable streams include:
+
+HTTP requests, on the client
+HTTP responses, on the server
+fs write streams
+zlib streams
+crypto streams
+TCP sockets
+child process stdin
+process.stdout, process.stderr
+Some of these examples are actually Duplex streams that implement the Writable interface.
+
+All Writable streams implement the interface defined by the stream.Writable class.
+
+While specific instances of Writable streams may differ in various ways, all Writable streams follow the same fundamental usage pattern as illustrated in the example below:
+
+const myStream = getWritableStreamSomehow();
+myStream.write('some data');
+myStream.write('some more data');
+myStream.end('done writing data'); COPY
+Class: stream.Writable#
+Added in: v0.9.4
+Event: 'close'#
+History
+The 'close' event is emitted when the stream and any of its underlying resources (a file descriptor, for example) have been closed. The event indicates that no more events will be emitted, and no further computation will occur.
+
+A Writable stream will always emit the 'close' event if it is created with the emitClose option.
+
+Event: 'drain'
+The node:stream module is useful for creating new types of stream instances. It is usually not necessary to use the node:stream module to consume streams.
+
+Organization of this document#
+This document contains two primary sections and a third section for notes. The first section explains how to use existing streams within an application. The second section explains how to create new types of streams.
+
+Types of streams#
+There are four fundamental stream types within Node.js:
+
+Writable: streams to which data can be written (for example, fs.createWriteStream()).
+Readable: streams from which data can be read (for example, fs.createReadStream()).
+Duplex: streams that are both Readable and Writable (for example, net.Socket).
+Transform: Duplex streams that can modify or transform the data as it is written and read (for example, zlib.createDeflate()).
+Additionally, this module includes the utility functions stream.pipeline(), stream.finished(), stream.Readable.from() and stream.addAbortSignal().
+
+Streams Promises API#
+Added in: v15.0.0
+The stream/promises API provides an alternative set of asynchronous utility functions for streams that return Promise objects rather than using callbacks. The API is accessible via require('node:stream/promises') or require('node:stream').promises.
+
+stream.pipeline(source[, ...transforms], destination[, options])#
+stream.pipeline(streams[, options])#
+Added in: v15.0.0
+streams <Stream[]> | <Iterable[]> | <AsyncIterable[]> | <Function[]>
+source <Stream> | <Iterable> | <AsyncIterable> | <Function>
+Returns: <Promise> | <AsyncIterable>
+...transforms <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+destination <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+options <Object>
+signal <AbortSignal>
+end <boolean>
+Returns: <Promise> Fulfills when the pipeline is complete.
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+To use an AbortSignal, pass it inside an options object, as the last argument. When the signal is aborted, destroy will be called on the underlying pipeline, with an AbortError.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  const ac = new AbortController();
+  const signal = ac.signal;
+
+  setImmediate(() => ac.abort());
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+    { signal },
+  );
+}
+
+run().catch(console.error); // AbortErrorCOPY
+The pipeline API also supports async generators:
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('lowercase.txt'),
+    async function* (source, { signal }) {
+      source.setEncoding('utf8');  // Work with strings rather than `Buffer`s.
+      for await (const chunk of source) {
+        yield await processChunk(chunk, { signal });
+      }
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+Remember to handle the signal argument passed into the async generator. Especially in the case where the async generator is the source for the pipeline (i.e. first argument) or the pipeline will never complete.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    async function* ({ signal }) {
+      await someLongRunningfn({ signal });
+      yield 'asd';
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+The pipeline API provides callback version:
+
+stream.finished(stream[, options])#
+Added in: v15.0.0
+stream <Stream>
+options <Object>
+error <boolean> | <undefined>
+readable <boolean> | <undefined>
+writable <boolean> | <undefined>
+signal: <AbortSignal> | <undefined>
+Returns: <Promise> Fulfills when the stream is no longer readable or writable.
+const { finished } = require('node:stream/promises');
+const fs = require('node:fs');
+
+const rs = fs.createReadStream('archive.tar');
+
+async function run() {
+  await finished(rs);
+  console.log('Stream is done reading.');
+}
+
+run().catch(console.error);
+rs.resume(); // Drain the stream.COPY
+The finished API also provides a callback version.
+
+Object mode#
+All streams created by Node.js APIs operate exclusively on strings and Buffer (or Uint8Array) objects. It is possible, however, for stream implementations to work with other types of JavaScript values (with the exception of null, which serves a special purpose within streams). Such streams are considered to operate in "object mode".
+
+Stream instances are switched into object mode using the objectMode option when the stream is created. Attempting to switch an existing stream into object mode is not safe.
+
+Buffering#
+Both Writable and Readable streams will store data in an internal buffer.
+
+The amount of data potentially buffered depends on the highWaterMark option passed into the stream's constructor. For normal streams, the highWaterMark option specifies a total number of bytes. For streams operating in object mode, the highWaterMark specifies a total number of objects.
+
+Data is buffered in Readable streams when the implementation calls stream.push(chunk). If the consumer of the Stream does not call stream.read(), the data will sit in the internal queue until it is consumed.
+
+Once the total size of the internal read buffer reaches the threshold specified by highWaterMark, the stream will temporarily stop reading data from the underlying resource until the data currently buffered can be consumed (that is, the stream will stop calling the internal readable._read() method that is used to fill the read buffer).
+
+Data is buffered in Writable streams when the writable.write(chunk) method is called repeatedly. While the total size of the internal write buffer is below the threshold set by highWaterMark, calls to writable.write() will return true. Once the size of the internal buffer reaches or exceeds the highWaterMark, false will be returned.
+
+A key goal of the stream API, particularly the stream.pipe() method, is to limit the buffering of data to acceptable levels such that sources and destinations of differing speeds will not overwhelm the available memory.
+
+The highWaterMark option is a threshold, not a limit: it dictates the amount of data that a stream buffers before it stops asking for more data. It does not enforce a strict memory limitation in general. Specific stream implementations may choose to enforce stricter limits but doing so is optional.
+
+Because Duplex and Transform streams are both Readable and Writable, each maintains two separate internal buffers used for reading and writing, allowing each side to operate independently of the other while maintaining an appropriate and efficient flow of data. For example, net.Socket instances are Duplex streams whose Readable side allows consumption of data received from the socket and whose Writable side allows writing data to the socket. Because data may be written to the socket at a faster or slower rate than data is received, each side should operate (and buffer) independently of the other.
+
+The mechanics of the internal buffering are an internal implementation detail and may be changed at any time. However, for certain advanced implementations, the internal buffers can be retrieved using writable.writableBuffer or readable.readableBuffer. Use of these undocumented properties is discouraged.
+
+API for stream consumers#
+Almost all Node.js applications, no matter how simple, use streams in some manner. The following is an example of using streams in a Node.js application that implements an HTTP server:
+
+const http = require('node:http');
+
+const server = http.createServer((req, res) => {
+  // `req` is an http.IncomingMessage, which is a readable stream.
+  // `res` is an http.ServerResponse, which is a writable stream.
+
+  let body = '';
+  // Get the data as utf8 strings.
+  // If an encoding is not set, Buffer objects will be received.
+  req.setEncoding('utf8');
+
+  // Readable streams emit 'data' events once a listener is added.
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+
+  // The 'end' event indicates that the entire body has been received.
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      // Write back something interesting to the user:
+      res.write(typeof data);
+      res.end();
+    } catch (er) {
+      // uh oh! bad json!
+      res.statusCode = 400;
+      return res.end(`error: ${er.message}`);
+    }
+  });
+});
+
+server.listen(1337);
+
+// $ curl localhost:1337 -d "{}"
+// object
+// $ curl localhost:1337 -d "\"foo\""
+// string
+// $ curl localhost:1337 -d "not json"
+// error: Unexpected token 'o', "not json" is not valid JSON COPY
+Writable streams (such as res in the example) expose methods such as write() and end() that are used to write data onto the stream.
+
+Readable streams use the EventEmitter API for notifying application code when data is available to be read off the stream. That available data can be read from the stream in multiple ways.
+
+Both Writable and Readable streams use the EventEmitter API in various ways to communicate the current state of the stream.
+
+Duplex and Transform streams are both Writable and Readable.
+
+Applications that are either writing data to or consuming data from a stream are not required to implement the stream interfaces directly and will generally have no reason to call require('node:stream').
+
+Developers wishing to implement new types of streams should refer to the section API for stream implementers.
+
+Writable streams#
+Writable streams are an abstraction for a destination to which data is written.
+
+Examples of Writable streams include:
+
+HTTP requests, on the client
+HTTP responses, on the server
+fs write streams
+zlib streams
+crypto streams
+TCP sockets
+child process stdin
+process.stdout, process.stderr
+Some of these examples are actually Duplex streams that implement the Writable interface.
+
+All Writable streams implement the interface defined by the stream.Writable class.
+
+While specific instances of Writable streams may differ in various ways, all Writable streams follow the same fundamental usage pattern as illustrated in the example below:
+
+const myStream = getWritableStreamSomehow();
+myStream.write('some data');
+myStream.write('some more data');
+myStream.end('done writing data'); COPY
+Class: stream.Writable#
+Added in: v0.9.4
+Event: 'close'#
+History
+The 'close' event is emitted when the stream and any of its underlying resources (a file descriptor, for example) have been closed. The event indicates that no more events will be emitted, and no further computation will occur.
+
+A Writable stream will always emit the 'close' event if it is created with the emitClose option.
+
+Event: 'drain'
+The node:stream module is useful for creating new types of stream instances. It is usually not necessary to use the node:stream module to consume streams.
+
+Organization of this document#
+This document contains two primary sections and a third section for notes. The first section explains how to use existing streams within an application. The second section explains how to create new types of streams.
+
+Types of streams#
+There are four fundamental stream types within Node.js:
+
+Writable: streams to which data can be written (for example, fs.createWriteStream()).
+Readable: streams from which data can be read (for example, fs.createReadStream()).
+Duplex: streams that are both Readable and Writable (for example, net.Socket).
+Transform: Duplex streams that can modify or transform the data as it is written and read (for example, zlib.createDeflate()).
+Additionally, this module includes the utility functions stream.pipeline(), stream.finished(), stream.Readable.from() and stream.addAbortSignal().
+
+Streams Promises API#
+Added in: v15.0.0
+The stream/promises API provides an alternative set of asynchronous utility functions for streams that return Promise objects rather than using callbacks. The API is accessible via require('node:stream/promises') or require('node:stream').promises.
+
+stream.pipeline(source[, ...transforms], destination[, options])#
+stream.pipeline(streams[, options])#
+Added in: v15.0.0
+streams <Stream[]> | <Iterable[]> | <AsyncIterable[]> | <Function[]>
+source <Stream> | <Iterable> | <AsyncIterable> | <Function>
+Returns: <Promise> | <AsyncIterable>
+...transforms <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+destination <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+options <Object>
+signal <AbortSignal>
+end <boolean>
+Returns: <Promise> Fulfills when the pipeline is complete.
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+To use an AbortSignal, pass it inside an options object, as the last argument. When the signal is aborted, destroy will be called on the underlying pipeline, with an AbortError.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  const ac = new AbortController();
+  const signal = ac.signal;
+
+  setImmediate(() => ac.abort());
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+    { signal },
+  );
+}
+
+run().catch(console.error); // AbortErrorCOPY
+The pipeline API also supports async generators:
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('lowercase.txt'),
+    async function* (source, { signal }) {
+      source.setEncoding('utf8');  // Work with strings rather than `Buffer`s.
+      for await (const chunk of source) {
+        yield await processChunk(chunk, { signal });
+      }
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+Remember to handle the signal argument passed into the async generator. Especially in the case where the async generator is the source for the pipeline (i.e. first argument) or the pipeline will never complete.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    async function* ({ signal }) {
+      await someLongRunningfn({ signal });
+      yield 'asd';
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+The pipeline API provides callback version:
+
+stream.finished(stream[, options])#
+Added in: v15.0.0
+stream <Stream>
+options <Object>
+error <boolean> | <undefined>
+readable <boolean> | <undefined>
+writable <boolean> | <undefined>
+signal: <AbortSignal> | <undefined>
+Returns: <Promise> Fulfills when the stream is no longer readable or writable.
+const { finished } = require('node:stream/promises');
+const fs = require('node:fs');
+
+const rs = fs.createReadStream('archive.tar');
+
+async function run() {
+  await finished(rs);
+  console.log('Stream is done reading.');
+}
+
+run().catch(console.error);
+rs.resume(); // Drain the stream.COPY
+The finished API also provides a callback version.
+
+Object mode#
+All streams created by Node.js APIs operate exclusively on strings and Buffer (or Uint8Array) objects. It is possible, however, for stream implementations to work with other types of JavaScript values (with the exception of null, which serves a special purpose within streams). Such streams are considered to operate in "object mode".
+
+Stream instances are switched into object mode using the objectMode option when the stream is created. Attempting to switch an existing stream into object mode is not safe.
+
+Buffering#
+Both Writable and Readable streams will store data in an internal buffer.
+
+The amount of data potentially buffered depends on the highWaterMark option passed into the stream's constructor. For normal streams, the highWaterMark option specifies a total number of bytes. For streams operating in object mode, the highWaterMark specifies a total number of objects.
+
+Data is buffered in Readable streams when the implementation calls stream.push(chunk). If the consumer of the Stream does not call stream.read(), the data will sit in the internal queue until it is consumed.
+
+Once the total size of the internal read buffer reaches the threshold specified by highWaterMark, the stream will temporarily stop reading data from the underlying resource until the data currently buffered can be consumed (that is, the stream will stop calling the internal readable._read() method that is used to fill the read buffer).
+
+Data is buffered in Writable streams when the writable.write(chunk) method is called repeatedly. While the total size of the internal write buffer is below the threshold set by highWaterMark, calls to writable.write() will return true. Once the size of the internal buffer reaches or exceeds the highWaterMark, false will be returned.
+
+A key goal of the stream API, particularly the stream.pipe() method, is to limit the buffering of data to acceptable levels such that sources and destinations of differing speeds will not overwhelm the available memory.
+
+The highWaterMark option is a threshold, not a limit: it dictates the amount of data that a stream buffers before it stops asking for more data. It does not enforce a strict memory limitation in general. Specific stream implementations may choose to enforce stricter limits but doing so is optional.
+
+Because Duplex and Transform streams are both Readable and Writable, each maintains two separate internal buffers used for reading and writing, allowing each side to operate independently of the other while maintaining an appropriate and efficient flow of data. For example, net.Socket instances are Duplex streams whose Readable side allows consumption of data received from the socket and whose Writable side allows writing data to the socket. Because data may be written to the socket at a faster or slower rate than data is received, each side should operate (and buffer) independently of the other.
+
+The mechanics of the internal buffering are an internal implementation detail and may be changed at any time. However, for certain advanced implementations, the internal buffers can be retrieved using writable.writableBuffer or readable.readableBuffer. Use of these undocumented properties is discouraged.
+
+API for stream consumers#
+Almost all Node.js applications, no matter how simple, use streams in some manner. The following is an example of using streams in a Node.js application that implements an HTTP server:
+
+const http = re
+---CHUNK END---
+
+---CHUNK START---
+quire('node:http');
+
+const server = http.createServer((req, res) => {
+  // `req` is an http.IncomingMessage, which is a readable stream.
+  // `res` is an http.ServerResponse, which is a writable stream.
+
+  let body = '';
+  // Get the data as utf8 strings.
+  // If an encoding is not set, Buffer objects will be received.
+  req.setEncoding('utf8');
+
+  // Readable streams emit 'data' events once a listener is added.
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+
+  // The 'end' event indicates that the entire body has been received.
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      // Write back something interesting to the user:
+      res.write(typeof data);
+      res.end();
+    } catch (er) {
+      // uh oh! bad json!
+      res.statusCode = 400;
+      return res.end(`error: ${er.message}`);
+    }
+  });
+});
+
+server.listen(1337);
+
+// $ curl localhost:1337 -d "{}"
+// object
+// $ curl localhost:1337 -d "\"foo\""
+// string
+// $ curl localhost:1337 -d "not json"
+// error: Unexpected token 'o', "not json" is not valid JSON COPY
+Writable streams (such as res in the example) expose methods such as write() and end() that are used to write data onto the stream.
+
+Readable streams use the EventEmitter API for notifying application code when data is available to be read off the stream. That available data can be read from the stream in multiple ways.
+
+Both Writable and Readable streams use the EventEmitter API in various ways to communicate the current state of the stream.
+
+Duplex and Transform streams are both Writable and Readable.
+
+Applications that are either writing data to or consuming data from a stream are not required to implement the stream interfaces directly and will generally have no reason to call require('node:stream').
+
+Developers wishing to implement new types of streams should refer to the section API for stream implementers.
+
+Writable streams#
+Writable streams are an abstraction for a destination to which data is written.
+
+Examples of Writable streams include:
+
+HTTP requests, on the client
+HTTP responses, on the server
+fs write streams
+zlib streams
+crypto streams
+TCP sockets
+child process stdin
+process.stdout, process.stderr
+Some of these examples are actually Duplex streams that implement the Writable interface.
+
+All Writable streams implement the interface defined by the stream.Writable class.
+
+While specific instances of Writable streams may differ in various ways, all Writable streams follow the same fundamental usage pattern as illustrated in the example below:
+
+const myStream = getWritableStreamSomehow();
+myStream.write('some data');
+myStream.write('some more data');
+myStream.end('done writing data'); COPY
+Class: stream.Writable#
+Added in: v0.9.4
+Event: 'close'#
+History
+The 'close' event is emitted when the stream and any of its underlying resources (a file descriptor, for example) have been closed. The event indicates that no more events will be emitted, and no further computation will occur.
+
+A Writable stream will always emit the 'close' event if it is created with the emitClose option.
+
+Event: 'drain'
+The node:stream module is useful for creating new types of stream instances. It is usually not necessary to use the node:stream module to consume streams.
+
+Organization of this document#
+This document contains two primary sections and a third section for notes. The first section explains how to use existing streams within an application. The second section explains how to create new types of streams.
+
+Types of streams#
+There are four fundamental stream types within Node.js:
+
+Writable: streams to which data can be written (for example, fs.createWriteStream()).
+Readable: streams from which data can be read (for example, fs.createReadStream()).
+Duplex: streams that are both Readable and Writable (for example, net.Socket).
+Transform: Duplex streams that can modify or transform the data as it is written and read (for example, zlib.createDeflate()).
+Additionally, this module includes the utility functions stream.pipeline(), stream.finished(), stream.Readable.from() and stream.addAbortSignal().
+
+Streams Promises API#
+Added in: v15.0.0
+The stream/promises API provides an alternative set of asynchronous utility functions for streams that return Promise objects rather than using callbacks. The API is accessible via require('node:stream/promises') or require('node:stream').promises.
+
+stream.pipeline(source[, ...transforms], destination[, options])#
+stream.pipeline(streams[, options])#
+Added in: v15.0.0
+streams <Stream[]> | <Iterable[]> | <AsyncIterable[]> | <Function[]>
+source <Stream> | <Iterable> | <AsyncIterable> | <Function>
+Returns: <Promise> | <AsyncIterable>
+...transforms <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+destination <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+options <Object>
+signal <AbortSignal>
+end <boolean>
+Returns: <Promise> Fulfills when the pipeline is complete.
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+To use an AbortSignal, pass it inside an options object, as the last argument. When the signal is aborted, destroy will be called on the underlying pipeline, with an AbortError.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  const ac = new AbortController();
+  const signal = ac.signal;
+
+  setImmediate(() => ac.abort());
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+    { signal },
+  );
+}
+
+run().catch(console.error); // AbortErrorCOPY
+The pipeline API also supports async generators:
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('lowercase.txt'),
+    async function* (source, { signal }) {
+      source.setEncoding('utf8');  // Work with strings rather than `Buffer`s.
+      for await (const chunk of source) {
+        yield await processChunk(chunk, { signal });
+      }
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+Remember to handle the signal argument passed into the async generator. Especially in the case where the async generator is the source for the pipeline (i.e. first argument) or the pipeline will never complete.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    async function* ({ signal }) {
+      await someLongRunningfn({ signal });
+      yield 'asd';
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+The pipeline API provides callback version:
+
+stream.finished(stream[, options])#
+Added in: v15.0.0
+stream <Stream>
+options <Object>
+error <boolean> | <undefined>
+readable <boolean> | <undefined>
+writable <boolean> | <undefined>
+signal: <AbortSignal> | <undefined>
+Returns: <Promise> Fulfills when the stream is no longer readable or writable.
+const { finished } = require('node:stream/promises');
+const fs = require('node:fs');
+
+const rs = fs.createReadStream('archive.tar');
+
+async function run() {
+  await finished(rs);
+  console.log('Stream is done reading.');
+}
+
+run().catch(console.error);
+rs.resume(); // Drain the stream.COPY
+The finished API also provides a callback version.
+
+Object mode#
+All streams created by Node.js APIs operate exclusively on strings and Buffer (or Uint8Array) objects. It is possible, however, for stream implementations to work with other types of JavaScript values (with the exception of null, which serves a special purpose within streams). Such streams are considered to operate in "object mode".
+
+Stream instances are switched into object mode using the objectMode option when the stream is created. Attempting to switch an existing stream into object mode is not safe.
+
+Buffering#
+Both Writable and Readable streams will store data in an internal buffer.
+
+The amount of data potentially buffered depends on the highWaterMark option passed into the stream's constructor. For normal streams, the highWaterMark option specifies a total number of bytes. For streams operating in object mode, the highWaterMark specifies a total number of objects.
+
+Data is buffered in Readable streams when the implementation calls stream.push(chunk). If the consumer of the Stream does not call stream.read(), the data will sit in the internal queue until it is consumed.
+
+Once the total size of the internal read buffer reaches the threshold specified by highWaterMark, the stream will temporarily stop reading data from the underlying resource until the data currently buffered can be consumed (that is, the stream will stop calling the internal readable._read() method that is used to fill the read buffer).
+
+Data is buffered in Writable streams when the writable.write(chunk) method is called repeatedly. While the total size of the internal write buffer is below the threshold set by highWaterMark, calls to writable.write() will return true. Once the size of the internal buffer reaches or exceeds the highWaterMark, false will be returned.
+
+A key goal of the stream API, particularly the stream.pipe() method, is to limit the buffering of data to acceptable levels such that sources and destinations of differing speeds will not overwhelm the available memory.
+
+The highWaterMark option is a threshold, not a limit: it dictates the amount of data that a stream buffers before it stops asking for more data. It does not enforce a strict memory limitation in general. Specific stream implementations may choose to enforce stricter limits but doing so is optional.
+
+Because Duplex and Transform streams are both Readable and Writable, each maintains two separate internal buffers used for reading and writing, allowing each side to operate independently of the other while maintaining an appropriate and efficient flow of data. For example, net.Socket instances are Duplex streams whose Readable side allows consumption of data received from the socket and whose Writable side allows writing data to the socket. Because data may be written to the socket at a faster or slower rate than data is received, each side should operate (and buffer) independently of the other.
+
+The mechanics of the internal buffering are an internal implementation detail and may be changed at any time. However, for certain advanced implementations, the internal buffers can be retrieved using writable.writableBuffer or readable.readableBuffer. Use of these undocumented properties is discouraged.
+
+API for stream consumers#
+Almost all Node.js applications, no matter how simple, use streams in some manner. The following is an example of using streams in a Node.js application that implements an HTTP server:
+
+const http = require('node:http');
+
+const server = http.createServer((req, res) => {
+  // `req` is an http.IncomingMessage, which is a readable stream.
+  // `res` is an http.ServerResponse, which is a writable stream.
+
+  let body = '';
+  // Get the data as utf8 strings.
+  // If an encoding is not set, Buffer objects will be received.
+  req.setEncoding('utf8');
+
+  // Readable streams emit 'data' events once a listener is added.
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+
+  // The 'end' event indicates that the entire body has been received.
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      // Write back something interesting to the user:
+      res.write(typeof data);
+      res.end();
+    } catch (er) {
+      // uh oh! bad json!
+      res.statusCode = 400;
+      return res.end(`error: ${er.message}`);
+    }
+  });
+});
+
+server.listen(1337);
+
+// $ curl localhost:1337 -d "{}"
+// object
+// $ curl localhost:1337 -d "\"foo\""
+// string
+// $ curl localhost:1337 -d "not json"
+// error: Unexpected token 'o', "not json" is not valid JSON COPY
+Writable streams (such as res in the example) expose methods such as write() and end() that are used to write data onto the stream.
+
+Readable streams use the EventEmitter API for notifying application code when data is available to be read off the stream. That available data can be read from the stream in multiple ways.
+
+Both Writable and Readable streams use the EventEmitter API in various ways to communicate the current state of the stream.
+
+Duplex and Transform streams are both Writable and Readable.
+
+Applications that are either writing data to or consuming data from a stream are not required to implement the stream interfaces directly and will generally have no reason to call require('node:stream').
+
+Developers wishing to implement new types of streams should refer to the section API for stream implementers.
+
+Writable streams#
+Writable streams are an abstraction for a destination to which data is written.
+
+Examples of Writable streams include:
+
+HTTP requests, on the client
+HTTP responses, on the server
+fs write streams
+zlib streams
+crypto streams
+TCP sockets
+child process stdin
+process.stdout, process.stderr
+Some of these examples are actually Duplex streams that implement the Writable interface.
+
+All Writable streams implement the interface defined by the stream.Writable class.
+
+While specific instances of Writable streams may differ in various ways, all Writable streams follow the same fundamental usage pattern as illustrated in the example below:
+
+const myStream = getWritableStreamSomehow();
+myStream.write('some data');
+myStream.write('some more data');
+myStream.end('done writing data'); COPY
+Class: stream.Writable#
+Added in: v0.9.4
+Event: 'close'#
+History
+The 'close' event is emitted when the stream and any of its underlying resources (a file descriptor, for example) have been closed. The event indicates that no more events will be emitted, and no further computation will occur.
+
+A Writable stream will always emit the 'close' event if it is created with the emitClose option.
+
+Event: 'drain'
+The node:stream module is useful for creating new types of stream instances. It is usually not necessary to use the node:stream module to consume streams.
+
+Organization of this document#
+This document contains two primary sections and a third section for notes. The first section explains how to use existing streams within an application. The second section explains how to create new types of streams.
+
+Types of streams#
+There are four fundamental stream types within Node.js:
+
+Writable: streams to which data can be written (for example, fs.createWriteStream()).
+Readable: streams from which data can be read (for example, fs.createReadStream()).
+Duplex: streams that are both Readable and Writable (for example, net.Socket).
+Transform: Duplex streams that can modify or transform the data as it is written and read (for example, zlib.createDeflate()).
+Additionally, this module includes the utility functions stream.pipeline(), stream.finished(), stream.Readable.from() and stream.addAbortSignal().
+
+Streams Promises API#
+Added in: v15.0.0
+The stream/promises API provides an alternative set of asynchronous utility functions for streams that return Promise objects rather than using callbacks. The API is accessible via require('node:stream/promises') or require('node:stream').promises.
+
+stream.pipeline(source[, ...transforms], destination[, options])#
+stream.pipeline(streams[, options])#
+Added in: v15.0.0
+streams <Stream[]> | <Iterable[]> | <AsyncIterable[]> | <Function[]>
+source <Stream> | <Iterable> | <AsyncIterable> | <Function>
+Returns: <Promise> | <AsyncIterable>
+...transforms <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+destination <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+options <Object>
+signal <AbortSignal>
+end <boolean>
+Returns: <Promise> Fulfills when the pipeline is complete.
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+To use an AbortSignal, pass it inside an options object, as the last argument. When the signal is aborted, destroy will be called on the underlying pipeline, with an AbortError.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  const ac = new AbortController();
+  const signal = ac.signal;
+
+  setImmediate(() => ac.abort());
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+    { signal },
+  );
+}
+
+run().catch(console.error); // AbortErrorCOPY
+The pipeline API also supports async generators:
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('lowercase.txt'),
+    async function* (source, { signal }) {
+      source.setEncoding('utf8');  // Work with strings rather than `Buffer`s.
+      for await (const chunk of source) {
+        yield await processChunk(chunk, { signal });
+      }
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+Remember to handle the signal argument passed into the async generator. Especially in the case where the async generator is the source for the pipeline (i.e. first argument) or the pipeline will never complete.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    async function* ({ signal }) {
+      await someLongRunningfn({ signal });
+      yield 'asd';
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+The pipeline API provides callback version:
+
+stream.finished(stream[, options])#
+Added in: v15.0.0
+stream <Stream>
+options <Object>
+error <boolean> | <undefined>
+readable <boolean> | <undefined>
+writable <boolean> | <undefined>
+signal: <AbortSignal> | <undefined>
+Returns: <Promise> Fulfills when the stream is no longer readable or writable.
+const { finished } = require('node:stream/promises');
+const fs = require('node:fs');
+
+const rs = fs.createReadStream('archive.tar');
+
+async function run() {
+  await finished(rs);
+  console.log('Stream is done reading.');
+}
+
+run().catch(console.error);
+rs.resume(); // Drain the stream.COPY
+The finished API also provides a callback version.
+
+Object mode#
+All streams created by Node.js APIs operate exclusively on strings and Buffer (or Uint8Array) objects. It is possible, however, for stream implementations to work with other types of JavaScript values (with the exception of null, which serves a special purpose within streams). Such streams are considered to operate in "object mode".
+
+Stream instances are switched into object mode using the objectMode option when the stream is created. Attempting to switch an existing stream into object mode is not safe.
+
+Buffering#
+Both Writable and Readable streams will store data in an internal buffer.
+
+The amount of data potentially buffered depends on the highWaterMark option passed into the stream's constructor. For normal streams, the highWaterMark option specifies a total number of bytes. For streams operating in object mode, the highWaterMark specifies a total number of objects.
+
+Data is buffered in Readable streams when the implementation calls stream.push(chunk). If the consumer of the Stream does not call stream.read(), the data will sit in the internal queue until it is consumed.
+
+Once the total size of the internal read buffer reaches the threshold specified by highWaterMark, the stream will temporarily stop reading data from the underlying resource until the data currently buffered can be consumed (that is, the stream will stop calling the internal readable._read() method that is used to fill the read buffer).
+
+Data is buffered in Writable streams when the writable.write(chunk) method is called repeatedly. While the total size of the internal write buffer is below the threshold set by highWaterMark, calls to writable.write() will return true. Once the size of the internal buffer reaches or exceeds the highWaterMark, false will be returned.
+
+A key goal of the stream API, particularly the stream.pipe() method, is to limit the buffering of data to acceptable levels such that sources and destinations of differing speeds will not overwhelm the available memory.
+
+The highWaterMark option is a threshold, not a limit: it dictates the amount of data that a stream buffers before it stops asking for more data. It does not enforce a strict memory limitation in general. Specific stream implementations may choose to enforce stricter limits but doing so is optional.
+
+Because Duplex and Transform streams are both Readable and Writable, each maintains two separate internal buffers used for reading and writing, allowing each side to operate independently of the other while maintaining an appropriate and efficient flow of data. For example, net.Socket instances are Duplex streams whose Readable side allows consumption of data received from the socket and whose Writable side allows writing data to the socket. Because data may be written to the socket at a faster or slower rate than data is received, each side should operate (and buffer) independently of the other.
+
+The mechanics of the internal buffering are an internal implementation detail and may be changed at any time. However, for certain advanced implementations, the internal buffers can be retrieved using writable.writableBuffer or readable.readableBuffer. Use of these undocumented properties is discouraged.
+
+API for stream consumers#
+Almost all Node.js applications, no matter how simple, use streams in some manner. The following is an example of using streams in a Node.js application that implements an HTTP server:
+
+const http = require('node:http');
+
+const server = http.createServer((req, res) => {
+  // `req` is an http.IncomingMessage, which is a readable stream.
+  // `res` is an http.ServerResponse, which is a writable stream.
+
+  let body = '';
+  // Get the data as utf8 strings.
+  // If an encoding is not set, Buffer objects will be received.
+  req.setEncoding('utf8');
+
+  // Readable streams emit 'data' events once a listener is added.
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+
+  // The 'end' event indicates that the entire body has been received.
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      // Write back something interesting to the user:
+      res.write(typeof data);
+      res.end();
+    } catch (er) {
+      // uh oh! bad json!
+      res.statusCode = 400;
+      return res.end(`error: ${er.message}`);
+    }
+  });
+});
+
+server.listen(1337);
+
+// $ curl localhost:1337 -d "{}"
+// object
+// $ curl localhost:1337 -d "\"foo\""
+// string
+// $ curl localhost:1337 -d "not json"
+// error: Unexpected token 'o', "not json" is not valid JSON COPY
+Writable streams (such as res in the example) expose methods such as write() and end() that are used to write data onto the stream.
+
+Readable streams use the EventEmitter API for notifying application code when data is available to be read off the stream. That available data can be read from the stream in multiple ways.
+
+Both Writable and Readable streams use the EventEmitter API in various ways to communicate the current state of the stream.
+
+Duplex and Transform streams are both Writable and Readable.
+
+Applications that are either writing data to or consuming data from a stream are not required to implement the stream interfaces directly and will generally have no reason to call require('node:stream').
+
+Developers wishing to implement new types of streams should refer to the section API for stream implementers.
+
+Writable streams#
+Writable streams are an abstraction for a destination to which data is written.
+
+Examples of Writable streams include:
+
+HTTP requests, on the client
+HTTP responses, on the server
+fs write streams
+zlib streams
+crypto streams
+TCP sockets
+child process stdin
+process.stdout, process.stderr
+Some of these examples are actually Duplex streams that implement the Writable interface.
+
+All Writable streams implement the interface defined by the stream.Writable class.
+
+While specific instances of Writable streams may differ in various ways, all Writable streams follow the same fundamental usage pattern as illustrated in the example below:
+
+const myStream = getWritableStreamSomehow();
+myStream.write('some data');
+myStream.write('some more data');
+myStream.end('done writing data'); COPY
+Class: stream.Writable#
+Added in: v0.9.4
+Event: 'close'#
+History
+The 'close' event is emitted when the stream and any of its underlying resources (a file descriptor, for example) have been closed. The event indicates that no more events will be emitted, and no further computation will occur.
+
+A Writable stream will always emit the 'close' event if it is created with the emitClose option.
+
+Event: 'drain'
+The node:stream module is useful for creating new types of stream instances. It is usually not necessary to use the node:stream module to consume streams.
+
+Organization of this document#
+This document contains two primary sections and a third section for notes. The first section explains how to use existing streams within an application. The second section explains how to create new types of streams.
+
+Types of streams#
+There are four fundamental stream types within Node.js:
+
+Writable: streams to which data can be written (for example, fs.createWriteStream()).
+Readable: streams from which data can be read (for example, fs.createReadStream()).
+Duplex: streams that are both Readable and Writable (for example, net.Socket).
+Transform: Duplex streams that can modify or transform the data as it is written and read (for example, zlib.createDeflate()).
+Additionally, this module includes the utility functions stream.pipeline(), stream.finished(), stream.Readable.from() and stream.addAbortSignal().
+
+Streams Promises API#
+Added in: v15.0.0
+The stream/promises API provides an alternative set of asynchronous utility functions for streams that return Promise objects rather than using callbacks. The API is accessible via require('node:stream/promises') or require('node:stream').promises.
+
+stream.pipeline(source[, ...transforms], destination[, options])#
+stream.pipeline(streams[, options])#
+Added in: v15.0.0
+streams <Stream[]> | <Iterable[]> | <AsyncIterable[]> | <Function[]>
+source <Stream> | <Iterable> | <AsyncIterable> | <Function>
+Returns: <Promise> | <AsyncIterable>
+...transforms <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+destination <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+options <Object>
+signal <AbortSignal>
+end <boolean>
+Returns: <Promise> Fulfills when the pipeline is complete.
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+To use an AbortSignal, pass it inside an options object, as the last argument. When the signal is aborted, destroy will be called on the underlying pipeline, with an AbortError.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  const ac = new AbortController();
+  const signal = ac.signal;
+
+  setImmediate(() => ac.abort());
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+    { signal },
+  );
+}
+
+run().catch(console.error); // AbortErrorCOPY
+The pipeline API also supports async generators:
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('lowercase.txt'),
+    async function* (source, { signal }) {
+      source.setEncoding('utf8');  // Work with strings rather than `Buffer`s.
+      for await (const chunk of source) {
+        yield await processChunk(chunk, { signal });
+      }
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+Remember to handle the signal argument passed into the async generator. Especially in the case where the async generator is the source for the pipeline (i.e. first argument) or the pipeline will never complete.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    async function* ({ signal }) {
+      await someLongRunningfn({ signal });
+      yield 'asd';
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+The pipeline API provides callback version:
+
+stream.finished(stream[, options])#
+Added in: v15.0.0
+stream <Stream>
+options <Object>
+error <boolean> | <undefined>
+readable <boolean> | <undefined>
+writable <boolean> | <undefined>
+signal: <AbortSignal> | <undefined>
+Returns: <Promise> Fulfills when the stream is no longer readable or writable.
+const { finished } = require('node:stream/promises');
+const fs = require('node:fs');
+
+const rs = fs.createReadStream('archive.tar');
+
+async function run() {
+  await finished(rs);
+  console.log('Stream is done reading.');
+}
+
+run().catch(console.error);
+rs.resume(); // Drain the stream.COPY
+The finished API also provides a callback version.
+
+Object mode#
+All streams created by Node.js APIs operate exclusively on strings and Buffer (or Uint8Array) objects. It is possible, however, for stream implementations to work with other types of JavaScript values (with the exception of null, which serves a special purpose within streams). Such streams are considered to operate in "object mode".
+
+Stream instances are switched into object mode using the objectMode option when the stream is created. Attempting to switch an existing stream into object mode is not safe.
+
+Buffering#
+Both Writable and Readable streams will store data in an internal buffer.
+
+The amount of data potentially buffered depends on the highWaterMark option passed into the stream's constructor. For normal streams, the highWaterMark option specifies a total number of bytes. For streams operating in object mode, the highWaterMark specifies a total number of objects.
+
+Data is buffered in Readable streams when the implementation calls stream.push(chunk). If the consumer of the Stream does not call stream.read(), the data will sit in the internal queue until it is consumed.
+
+Once the total size of the internal read buffer reaches the threshold specified by highWaterMark, the stream will temporarily stop reading data from the underlying resource until the data currently buffered can be consumed (that is, the stream will stop calling the internal readable._read() method that is used to fill the read buffer).
+
+Data is buffered in Writable streams when the writable.write(chunk) method is called repeatedly. While the total size of the internal write buffer is below the threshold set by highWaterMark, calls to writable.write() will return true. Once the size of the internal buffer reaches or exceeds the highWaterMark, false will be returned.
+
+A key goal of the stream API, particularly the stream.pipe() method, is to limit the buffering of data to acceptable levels such that sources and destinations of differing speeds will not overwhelm the available memory.
+
+The highWaterMark option is a threshold, not a limit: it dictates the amount of data that a stream buffers before it stops asking for more data. It does not enforce a strict memory limitation in general. Specific stream implementations may choose to enforce stricter limits but doing so is optional.
+
+Because Duplex and Transform streams are both Readable and Writable, each maintains two separate internal buffers used for reading and writing, allowing each side to operate independently of the other while maintaining an appropriate and efficient flow of data. For example, net.Socket instances are Duplex streams whose Readable side allows consumption of data received from the socket and whose Writable side allows writing data to the socket. Because data may be written to the socket at a faster or slower rate than data is received, each side should operate (and buffer) independently of the other.
+
+The mechanics of the internal buffering are an internal implementation detail and may be changed at any time. However, for certain advanced implementations, the internal buffers can be retrieved using writable.writableBuffer or readable.readableBuffer. Use of these undocumented properties is discouraged.
+
+API for stream consumers#
+Almost all Node.js applications, no matter how simple, use streams in some manner. The following is an example of using streams in a Node.js application that implements an HTTP server:
+
+const http = require('node:http');
+
+const server = http.createServer((req, res) => {
+  // `req` is an http.IncomingMessage, which is a readable stream.
+  // `res` is an http.ServerResponse, which is a writable stream.
+
+  let body = '';
+  // Get the data as utf8 strings.
+  // If an encoding is not set, Buffer objects will be received.
+  req.setEncoding('utf8');
+
+  // Readable streams emit 'data' events once a listener is added.
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+
+  // The 'end' event indicates that the entire body has been received.
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      // Write back something interesting to the user:
+      res.write(typeof data);
+      res.end();
+    } catch (er) {
+      // uh oh! bad json!
+      res.statusCode = 400;
+      return res.end(`error: ${er.message}`);
+    }
+  });
+});
+
+server.listen(1337);
+
+// $ curl localhost:1337 -d "{}"
+// object
+// $ curl localhost:1337 -d "\"foo\""
+// string
+// $ curl localhost:1337 -d "not json"
+// error: Unexpected token 'o', "not json" is not valid JSON COPY
+Writable streams (such as res in the example) expose methods such as write() and end() that are used to write data onto the stream.
+
+Readable streams use the EventEmitter API for notifying application code when data is available to be read off the stream. That available data can be read from the stream in multiple ways.
+
+Both Writable and Readable streams use the EventEmitter API in various ways to communicate the current state of the stream.
+
+Duplex and Transform streams are both Writable and Readable.
+
+Applications that are either writing data to or consuming data from a stream are not required to implement the stream interfaces directly and will generally have no reason to call require('node:stream').
+
+Developers wishing to implement new types of streams should refer to the section API for stream implementers.
+
+Writable streams#
+Writable streams are an abstraction for a destination to which data is written.
+
+Examples of Writable streams include:
+
+HTTP requests, on the client
+HTTP responses, on the server
+fs write streams
+zlib streams
+crypto streams
+TCP sockets
+child process stdin
+process.stdout, process.stderr
+Some of these examples are actually Duplex streams that implement the Writable interface.
+
+All Writable streams implement the interface defined by the stream.Writable class.
+
+While specific instances of Writable streams may differ in various ways, all Writable streams follow the same fundamental usage pattern as illustrated in the example below:
+
+const myStream = getWritableStreamSomehow();
+myStream.write('some data');
+myStream.write('some more data');
+myStream.end('done writing data'); COPY
+Class: stream.Writable#
+Added in: v0.9.4
+Event: 'close'#
+History
+The 'close' event is emitted when the stream and any of its underlying resources (a file descriptor, for example) have been closed. The event indicates that no more events will be emitted, and no further computation will occur.
+
+A Writable stream will always emit the 'close' event if it is created with the emitClose option.
+
+Event: 'drain'
+The node:stream module is useful for creating new types of stream instances. It is usually not necessary to use the node:stream module to consume streams.
+
+Organization of this document#
+This document contains two primary sections and a third section for notes. The first section explains how to use existing streams within an application. The second section explains how to create new types of streams.
+
+Types of streams#
+There are four fundamental stream types within Node.js:
+
+Writable: streams to which data can be written (for example, fs.createWriteStream()).
+Readable: streams from which data can be read (for example, fs.createReadStream()).
+Duplex: streams that are both Readable and Writable (for example, net.Socket).
+Transform: Duplex streams that can modify or transform the data as it is written and read (for example, zlib.createDeflate()).
+Additionally, this module includes the utility functions stream.pipeline(), stream.finished(), stream.Readable.from() and stream.addAbortSignal().
+
+Streams Promises API#
+Added in: v15.0.0
+The stream/promises API provides an alternative set of asynchronous utility functions for streams that return Promise objects rather than using callbacks. The API is accessible via require('node:stream/promises') or require('node:stream').promises.
+
+stream.pipeline(source[, ...transforms], destination[, options])#
+stream.pipeline(streams[, options])#
+Added in: v15.0.0
+streams <Stream[]> | <Iterable[]> | <AsyncIterable[]> | <Function[]>
+source <Stream> | <Iterable> | <AsyncIterable> | <Function>
+Returns: <Promise> | <AsyncIterable>
+...transforms <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+destination <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+options <Object>
+signal <AbortSignal>
+end <boolean>
+Returns: <Promise> Fulfills when the pipeline is complete.
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+To use an AbortSignal, pass it inside an options object, as the last argument. When the signal is aborted, destroy will be called on the underlying pipeline, with an AbortError.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  const ac = new AbortController();
+  const signal = ac.signal;
+
+  setImmediate(() => ac.abort());
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+    { signal },
+  );
+}
+
+run().catch(console.error); // AbortErrorCOPY
+The pipeline API also supports async generators:
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('lowercase.txt'),
+    async function* (source, { signal }) {
+      source.setEncoding('utf8');  // Work with strings rather than `Buffer`s.
+      for await (const chunk of source) {
+        yield await processChunk(chunk, { signal });
+      }
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+Remember to handle the signal argument passed into the async generator. Especially in the case where the async generator is the source for the pipeline (i.e. first argument) or the pipeline will never complete.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    async function* ({ signal }) {
+      await someLongRunningfn({ signal });
+      yield 'asd';
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+The pipeline API provides callback version:
+
+stream.finished(stream[, options])#
+Added in: v15.0.0
+stream <Stream>
+options <Object>
+error <boolean> | <undefined>
+readable <boolean> | <undefined>
+writable <boolean> | <undefined>
+signal: <AbortSignal> | <undefined>
+Returns: <Promise> Fulfills when the stream is no longer readable or writable.
+const { finished } = require('node:stream/promises');
+const fs = require('node:fs');
+
+const rs = fs.createReadStream('archive.tar');
+
+async function run() {
+  await finished(rs);
+  console.log('Stream is done reading.');
+}
+
+run().catch(console.error);
+rs.resume(); // Drain the stream.COPY
+The finished API also provides a callback version.
+
+Object mode#
+All streams created by Node.js APIs operate exclusively on strings and Buffer (or Uint8Array) objects. It is possible, however, for stream implementations to work with other types of JavaScript values (with the exception of null, which serves a special purpose within streams). Such streams are considered to operate in "object mode".
+
+Stream instances are switched into object mode using the objectMode option when the stream is created. Attempting to switch an existing stream into object mode is not safe.
+
+Buffering#
+Both Writable and Readable streams will store data in an internal buffer.
+
+The amount of data potentially buffered depends on the highWaterMark option passed into the stream's constructor. For normal streams, the highWaterMark option specifies a total number of bytes. For streams operating in object mode, the highWaterMark specifies a total number of objects.
+
+Data is buffered in Readable streams when the implementation calls stream.push(chunk). If the consumer of the Stream does not call stream.read(), the data will sit in the internal queue until it is consumed.
+
+Once the total size of the internal read buffer reaches the threshold specified by highWaterMark, the stream will temporarily stop reading data from the underlying resource until the data currently buffered can be consumed (that is, the stream will stop calling the internal readable._read() method that is used to fill the read buffer).
+
+Data is buffered in Writable streams when the writable.write(chunk) method is called repeatedly. While the total size of the internal write buffer is below the threshold set by highWaterMark, calls to writable.write() will return true. Once the size of the internal buffer reaches or exceeds the highWaterMark, false will be returned.
+
+A key goal of the stream API, particularly the stream.pipe() method, is to limit the buffering of data to acceptable levels such that sources and destinations of differing speeds will not overwhelm the available memory.
+
+The highWaterMark option is a threshold, not a limit: it dictates the amount of data that a stream buffers before it stops asking for more data. It does not enforce a strict memory limitation in general. Specific stream implementations may choose to enforce stricter limits but doing so is optional.
+
+Because Duplex and Transform streams are both Readable and Writable, each maintains two separate internal buffers used for reading and writing, allowing each side to operate independently of the other while maintaining an appropriate and efficient flow of data. For example, net.Socket instances are Duplex streams whose Readable side allows consumption of data received from the socket and whose Writable side allows writing data to the socket. Because data may be written to the socket at a faster or slower rate than data is received, each side should operate (and buffer) independently of the other.
+
+The mechanics of the internal buffering are an internal implementation detail and may be changed at any time. However, for certain advanced implementations, the internal buffers can be retrieved using writable.writableBuffer or readable.readableBuffer. Use of these undocumented properties is discouraged.
+
+API for stream consumers#
+Almost all Node.js applications, no matter how simple, use streams in some manner. The following is an example of using streams in a Node.js application that implements an HTTP server:
+
+const http = require('node:http');
+
+const server = http.createServer((req, res) => {
+  // `req` is an http.IncomingMessage, which is a readable stream.
+  // `res` is an http.ServerResponse, which is a writable stream.
+
+  let body = '';
+  // Get the data as utf8 strings.
+  // If an encoding is not set, Buffer objects will be received.
+  req.setEncoding('utf8');
+
+  // Readable streams emit 'data' events once a listener is added.
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+
+  // The 'end' event indicates that the entire body has been received.
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      // Write back something interesting to the user:
+      res.write(typeof data);
+      res.end();
+    } catch (er) {
+      // uh oh! bad json!
+      res.statusCode = 400;
+      return res.end(`error: ${er.message}`);
+    }
+  });
+});
+
+server.listen(1337);
+
+// $ curl localhost:1337 -d "{}"
+// object
+// $ curl localhost:1337 -d "\"foo\""
+// string
+// $ curl localhost:1337 -d "not json"
+// error: Unexpected token 'o', "not json" is not valid JSON COPY
+Writable streams (such as res in the example) expose methods such as write() and end() that are used to write data onto the stream.
+
+Readable streams use the EventEmitter API for notifying application code when data is available to be read off the stream. That available data can be read from the stream in multiple ways.
+
+Both Writable and Readable streams use the EventEmitter API in various ways to communicate the current state of the stream.
+
+Duplex and Transform streams are both Writable and Readable.
+
+Applications that are either writing data to or consuming data from a stream are not required to implement the stream interfaces directly and will generally have no reason to call require('node:stream').
+
+Developers wishing to implement new types of streams should refer to the section API for stream implementers.
+
+Writable streams#
+Writable streams are an abstraction for a destination to which data is written.
+
+Examples of Writable streams include:
+
+HTTP requests, on the client
+HTTP responses, on the server
+fs write streams
+zlib streams
+crypto streams
+TCP sockets
+child process stdin
+process.stdout, process.stderr
+Some of these examples are actually Duplex streams that implement the Writable interface.
+
+All Writable streams implement the interface defined by the stream.Writable class.
+
+While specific instances of Writable streams may differ in various ways, all Writable streams follow the same fundamental usage pattern as illustrated in the example below:
+
+const myStream = getWritableStreamSomehow();
+myStream.write('some data');
+myStream.write('some more data');
+myStream.end('done writing data'); COPY
+Class: stream.Writable#
+Added in: v0.9.4
+Event: 'close'#
+History
+The 'close' event is emitted when the stream and any of its underlying resources (a file descriptor, for example) have been closed. The event indicates that no more events will be emitted, and no further computation will occur.
+
+A Writable stream will always emit the 'close' event if it is created with the emitClose option.
+
+Event: 'drain'
+The node:stream module is useful for creating new types of stream instances. It is usually not necessary to use the node:stream module to consume streams.
+
+Organization of this document#
+This document contains two primary sections and a third section for notes. The first section explains how to use existing streams within an application. The second section explains how to create new types of streams.
+
+Types of streams#
+There are four fundamental stream types within Node.js:
+
+Writable: streams to which data can be written (for example, fs.createWriteStream()).
+Readable: streams from which data can be read (for example, fs.createReadStream()).
+Duplex: streams that are both Readable and Writable (for example, net.Socket).
+Transform: Duplex streams that can modify or transform the data as it is written and read (for example, zlib.createDeflate()).
+Additionally, this module includes the utility functions stream.pipeline(), stream.finished(), stream.Readable.from() and stream.addAbortSignal().
+
+Streams Promises API#
+Added in: v15.0.0
+The stream/promises API provides an alternative set of asynchronous utility functions for streams that return Promise objects rather than using callbacks. The API is accessible via require('node:stream/promises') or require('node:stream').promises.
+
+stream.pipeline(source[, ...transforms], destination[, options])#
+stream.pipeline(streams[, options])#
+Added in: v15.0.0
+streams <Stream[]> | <Iterable[]> | <AsyncIterable[]> | <Function[]>
+source <Stream> | <Iterable> | <AsyncIterable> | <Function>
+Returns: <Promise> | <AsyncIterable>
+...transforms <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+destination <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+options <Object>
+signal <AbortSignal>
+end <boolean>
+Returns: <Promise> Fulfills when the pipeline is complete.
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+To use an AbortSignal, pass it inside an options object, as the last argument. When the signal is aborted, destroy will be called on the underlying pipeline, with an AbortError.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  const ac = new AbortController();
+  const signal = ac.signal;
+
+  setImmediate(() => ac.abort());
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+    { signal },
+  );
+}
+
+run().catch(console.error); // AbortErrorCOPY
+The pipeline API also supports async generators:
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('lowercase.txt'),
+    async function* (source, { signal }) {
+      source.setEncoding('utf8');  // Work with strings rather than `Buffer`s.
+      for await (const chunk of source) {
+        yield await processChunk(chunk, { signal });
+      }
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+Remember to handle the signal argument passed into the async generator. Especially in the case where the async generator is the source for the pipeline (i.e. first argument) or the pipeline will never complete.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    async function* ({ signal }) {
+      await someLongRunningfn({ signal });
+      yield 'asd';
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+The pipeline API provides callback version:
+
+stream.finished(stream[, options])#
+Added in: v15.0.0
+stream <Stream>
+options <Object>
+error <boolean> | <undefined>
+readable <boolean> | <undefined>
+writable <boolean> | <undefined>
+signal: <AbortSignal> | <undefined>
+Returns: <Promise> Fulfills when the stream is no longer readable or writable.
+const { finished } = require('node:stream/promises');
+const fs = require('node:fs');
+
+const rs = fs.createReadStream('archive.tar');
+
+async function run() {
+  await finished(rs);
+  console.log('Stream is done reading.');
+}
+
+run().catch(console.error);
+rs.resume(); // Drain the stream.COPY
+The finished API also provides a callback version.
+
+Object mode#
+All streams created by Node.js APIs operate exclusively on strings and Buffer (or Uint8Array) objects. It is possible, however, for stream implementations to work with other types of JavaScript values (with the exception of null, which serves a special purpose within streams). Such streams are considered to operate in "object mode".
+
+Stream instances are switched into object mode using the objectMode option when the stream is created. Attempting to switch an existing stream into object mode is not safe.
+
+Buffering#
+Both Writable and Readable streams will store data in an internal buffer.
+
+The amount of data potentially buffered depends on the highWaterMark option passed into the stream's constructor. For normal streams, the highWaterMark option specifies a total number of bytes. For streams operating in object mode, the highWaterMark specifies a total number of objects.
+
+Data is buffered in Readable streams when the implementation calls stream.push(chunk). If the consumer of the Stream does not call stream.read(), the data will sit in the internal queue until it is consumed.
+
+Once the total size of the internal read buffer reaches the threshold specified by highWaterMark, the stream will temporarily stop reading data from the underlying resource until the data currently buffered can be consumed (that is, the stream will stop calling the internal readable._read() method that is used to fill the read buffer).
+
+Data is buffered in Writable streams when the writable.write(chunk) method is called repeatedly. While the total size of the internal write buffer is below the threshold set by highWaterMark, calls to writable.write() will return true. Once the size of the internal buffer reaches or exceeds the highWaterMark, false will be returned.
+
+A key goal of the stream API, particularly the stream.pipe() method, is to limit the buffering of data to acceptable levels such that sources and destinations of differing speeds will not overwhelm the available memory.
+
+The highWaterMark option is a threshold, not a limit: it dictates the amount of data that a stream buffers before it stops asking for more data. It does not enforce a strict memory limitation in general. Specific stream implementations may choose to enforce stricter limits but doing so is optional.
+
+Because Duplex and Transform streams are both Readable and Writable, each maintains two separate internal buffers used for reading and writing, allowing each side to operate independently of the other while maintaining an appropriate and efficient flow of data. For example, net.Socket instances are Duplex streams whose Readable side allows consumption of data received from the socket and whose Writable side allows writing data to the socket. Because data may be written to the socket at a faster or slower rate than data is received, each side should operate (and buffer) independently of the other.
+
+The mechanics of the internal buffering are an internal implementation detail and may be changed at any time. However, for certain advanced implementations, the internal buffers can be retrieved using writable.writableBuffer or readable.readableBuffer. Use of these undocumented properties is discouraged.
+
+API for stream consumers#
+Almost all Node.js applications, no matter how simple, use streams in some manner. The following is an example of using streams in a Node.js application that implements an HTTP server:
+
+const http = require('node:http');
+
+const server = http.createServer((req, res) => {
+  // `req` is an http.IncomingMessage, which is a readable stream.
+  // `res` is an http.ServerResponse, which is a writable stream.
+
+  let body = '';
+  // Get the data as utf8 strings.
+  // If an encoding is not set, Buffer objects will be received.
+  req.setEncoding('utf8');
+
+  // Readable streams emit 'data' events once a listener is added.
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+
+  // The 'end' event indicates that the entire body has been received.
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      // Write back something interesting to the user:
+      res.write(typeof data);
+      res.end();
+    } catch (er) {
+      // uh oh! bad json!
+      res.statusCode = 400;
+      return res.end(`error: ${er.message}`);
+    }
+  });
+});
+
+server.listen(1337);
+
+// $ curl localhost:1337 -d "{}"
+// object
+// $ curl localhost:1337 -d "\"foo\""
+// string
+// $ curl localhost:1337 -d "not json"
+// error: Unexpected token 'o', "not json" is not valid JSON COPY
+Writable streams (such as res in the example) expose methods such as write() and end() that are used to write data onto the stream.
+
+Readable streams use the EventEmitter API for notifying application code when data is available to be read off the stream. That available data can be read from the stream in multiple ways.
+
+Both Writable and Readable streams use the EventEmitter API in various ways to communicate the current state of the stream.
+
+Duplex and Transform streams are both Writable and Readable.
+
+Applications that are either writing data to or consuming data from a stream are not required to implement the stream interfaces directly and will generally have no reason to call require('node:stream').
+
+Developers wishing to implement new types of streams should refer to the section API for stream implementers.
+
+Writable streams#
+Writable streams are an abstraction for a destination to which data is written.
+
+Examples of Writable streams include:
+
+HTTP requests, on the client
+HTTP responses, on the server
+fs write streams
+zlib streams
+crypto streams
+TCP sockets
+child process stdin
+process.stdout, process.stderr
+Some of these examples are actually Duplex streams that implement the Writable interface.
+
+All Writable streams implement the interface defined by the stream.Writable class.
+
+While specific instances of Writable streams may differ in various ways, all Writable streams follow the same fundamental usage pattern as illustrated in the example below:
+
+const myStream = getWritableStreamSomehow();
+myStream.write('some data');
+myStream.write('some more data');
+myStream.end('done writing data'); COPY
+Class: stream.Writable#
+Added in: v0.9.4
+Event: 'close'#
+History
+The 'close' event is emitted when the stream and any of its underlying resources (a file descriptor, for example) have been closed. The event indicates that no more events will be emitted, and no further computation will occur.
+
+A Writable stream will always emit the 'close' event if it is created with the emitClose option.
+
+Event: 'drain'
+The node:stream module is useful for creating new types of stream instances. It is usually not necessary to use the node:stream module to consume streams.
+
+Organization of this document#
+This document contains two primary sections and a third section for notes. The first section explains how to use existing streams within an application. The second section explains how to create new types of streams.
+
+Types of streams#
+There are four fundamental stream types within Node.js:
+
+Writable: streams to which data can be written (for example, fs.createWriteStream()).
+Readable: streams from which data can be read (for example, fs.createReadStream()).
+Duplex: streams that are both Readable and Writable (for example, net.Socket).
+Transform: Duplex streams that can modify or transform the data as it is written and read (for example, zlib.createDeflate()).
+Additionally, this module includes the utility functions stream.pipeline(), stream.finished(), stream.Readable.from() and stream.addAbortSignal().
+
+Streams Promises API#
+Added in: v15.0.0
+The stream/promises API provides an alternative set of asynchronous utility functions for streams that return Promise objects rather than using callbacks. The API is accessible via require('node:stream/promises') or require('node:stream').promises.
+
+stream.pipeline(source[, ...transforms], destination[, options])#
+stream.pipeline(streams[, options])#
+Added in: v15.0.0
+streams <Stream[]> | <Iterable[]> | <AsyncIterable[]> | <Function[]>
+source <Stream> | <Iterable> | <AsyncIterable> | <Function>
+Returns: <Promise> | <AsyncIterable>
+...transforms <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+destination <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+options <Object>
+signal <AbortSignal>
+end <boolean>
+Returns: <Promise> Fulfills when the pipeline is complete.
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+To use an AbortSignal, pass it inside an options object, as the last argument. When the signal is aborted, destroy will be called on the underlying pipeline, with an AbortError.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  const ac = new AbortController();
+  const signal = ac.signal;
+
+  setImmediate(() => ac.abort());
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+    { signal },
+  );
+}
+
+run().catch(console.error); // AbortErrorCOPY
+The pipeline API also supports async generators:
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('lowercase.txt'),
+    async function* (source, { signal }) {
+      source.setEncoding('utf8');  // Work with strings rather than `Buffer`s.
+      for await (const chunk of source) {
+        yield await processChunk(chunk, { signal });
+      }
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+Remember to handle the signal argument passed into the async generator. Especially in the case where the async generator is the source for the pipeline (i.e. first argument) or the pipeline will never complete.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    async function* ({ signal }) {
+      await someLongRunningfn({ signal });
+      yield 'asd';
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+The pipeline API provides callback version:
+
+stream.finished(stream[, options])#
+Added in: v15.0.0
+stream <Stream>
+options <Object>
+error <boolean> | <undefined>
+readable <boolean> | <undefined>
+writable <boolean> | <undefined>
+signal: <AbortSignal> | <undefined>
+Returns: <Promise> Fulfills when the stream is no longer readable or writable.
+const { finished } = require('node:stream/promises');
+const fs = require('node:fs');
+
+const rs = fs.createReadStream('archive.tar');
+
+async function run() {
+  await finished(rs);
+  console.log('Stream is done reading.');
+}
+
+run().catch(console.error);
+rs.resume(); // Drain the stream.COPY
+The finished API also provides a callback version.
+
+Object mode#
+All streams created by Node.js APIs operate exclusively on strings and Buffer (or Uint8Array) objects. It is possible, however, for stream implementations to work with other types of JavaScript values (with the exception of null, which serves a special purpose within
+---CHUNK END---
+
+---CHUNK START---
+ streams). Such streams are considered to operate in "object mode".
+
+Stream instances are switched into object mode using the objectMode option when the stream is created. Attempting to switch an existing stream into object mode is not safe.
+
+Buffering#
+Both Writable and Readable streams will store data in an internal buffer.
+
+The amount of data potentially buffered depends on the highWaterMark option passed into the stream's constructor. For normal streams, the highWaterMark option specifies a total number of bytes. For streams operating in object mode, the highWaterMark specifies a total number of objects.
+
+Data is buffered in Readable streams when the implementation calls stream.push(chunk). If the consumer of the Stream does not call stream.read(), the data will sit in the internal queue until it is consumed.
+
+Once the total size of the internal read buffer reaches the threshold specified by highWaterMark, the stream will temporarily stop reading data from the underlying resource until the data currently buffered can be consumed (that is, the stream will stop calling the internal readable._read() method that is used to fill the read buffer).
+
+Data is buffered in Writable streams when the writable.write(chunk) method is called repeatedly. While the total size of the internal write buffer is below the threshold set by highWaterMark, calls to writable.write() will return true. Once the size of the internal buffer reaches or exceeds the highWaterMark, false will be returned.
+
+A key goal of the stream API, particularly the stream.pipe() method, is to limit the buffering of data to acceptable levels such that sources and destinations of differing speeds will not overwhelm the available memory.
+
+The highWaterMark option is a threshold, not a limit: it dictates the amount of data that a stream buffers before it stops asking for more data. It does not enforce a strict memory limitation in general. Specific stream implementations may choose to enforce stricter limits but doing so is optional.
+
+Because Duplex and Transform streams are both Readable and Writable, each maintains two separate internal buffers used for reading and writing, allowing each side to operate independently of the other while maintaining an appropriate and efficient flow of data. For example, net.Socket instances are Duplex streams whose Readable side allows consumption of data received from the socket and whose Writable side allows writing data to the socket. Because data may be written to the socket at a faster or slower rate than data is received, each side should operate (and buffer) independently of the other.
+
+The mechanics of the internal buffering are an internal implementation detail and may be changed at any time. However, for certain advanced implementations, the internal buffers can be retrieved using writable.writableBuffer or readable.readableBuffer. Use of these undocumented properties is discouraged.
+
+API for stream consumers#
+Almost all Node.js applications, no matter how simple, use streams in some manner. The following is an example of using streams in a Node.js application that implements an HTTP server:
+
+const http = require('node:http');
+
+const server = http.createServer((req, res) => {
+  // `req` is an http.IncomingMessage, which is a readable stream.
+  // `res` is an http.ServerResponse, which is a writable stream.
+
+  let body = '';
+  // Get the data as utf8 strings.
+  // If an encoding is not set, Buffer objects will be received.
+  req.setEncoding('utf8');
+
+  // Readable streams emit 'data' events once a listener is added.
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+
+  // The 'end' event indicates that the entire body has been received.
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      // Write back something interesting to the user:
+      res.write(typeof data);
+      res.end();
+    } catch (er) {
+      // uh oh! bad json!
+      res.statusCode = 400;
+      return res.end(`error: ${er.message}`);
+    }
+  });
+});
+
+server.listen(1337);
+
+// $ curl localhost:1337 -d "{}"
+// object
+// $ curl localhost:1337 -d "\"foo\""
+// string
+// $ curl localhost:1337 -d "not json"
+// error: Unexpected token 'o', "not json" is not valid JSON COPY
+Writable streams (such as res in the example) expose methods such as write() and end() that are used to write data onto the stream.
+
+Readable streams use the EventEmitter API for notifying application code when data is available to be read off the stream. That available data can be read from the stream in multiple ways.
+
+Both Writable and Readable streams use the EventEmitter API in various ways to communicate the current state of the stream.
+
+Duplex and Transform streams are both Writable and Readable.
+
+Applications that are either writing data to or consuming data from a stream are not required to implement the stream interfaces directly and will generally have no reason to call require('node:stream').
+
+Developers wishing to implement new types of streams should refer to the section API for stream implementers.
+
+Writable streams#
+Writable streams are an abstraction for a destination to which data is written.
+
+Examples of Writable streams include:
+
+HTTP requests, on the client
+HTTP responses, on the server
+fs write streams
+zlib streams
+crypto streams
+TCP sockets
+child process stdin
+process.stdout, process.stderr
+Some of these examples are actually Duplex streams that implement the Writable interface.
+
+All Writable streams implement the interface defined by the stream.Writable class.
+
+While specific instances of Writable streams may differ in various ways, all Writable streams follow the same fundamental usage pattern as illustrated in the example below:
+
+const myStream = getWritableStreamSomehow();
+myStream.write('some data');
+myStream.write('some more data');
+myStream.end('done writing data'); COPY
+Class: stream.Writable#
+Added in: v0.9.4
+Event: 'close'#
+History
+The 'close' event is emitted when the stream and any of its underlying resources (a file descriptor, for example) have been closed. The event indicates that no more events will be emitted, and no further computation will occur.
+
+A Writable stream will always emit the 'close' event if it is created with the emitClose option.
+
+Event: 'drain'
+The node:stream module is useful for creating new types of stream instances. It is usually not necessary to use the node:stream module to consume streams.
+
+Organization of this document#
+This document contains two primary sections and a third section for notes. The first section explains how to use existing streams within an application. The second section explains how to create new types of streams.
+
+Types of streams#
+There are four fundamental stream types within Node.js:
+
+Writable: streams to which data can be written (for example, fs.createWriteStream()).
+Readable: streams from which data can be read (for example, fs.createReadStream()).
+Duplex: streams that are both Readable and Writable (for example, net.Socket).
+Transform: Duplex streams that can modify or transform the data as it is written and read (for example, zlib.createDeflate()).
+Additionally, this module includes the utility functions stream.pipeline(), stream.finished(), stream.Readable.from() and stream.addAbortSignal().
+
+Streams Promises API#
+Added in: v15.0.0
+The stream/promises API provides an alternative set of asynchronous utility functions for streams that return Promise objects rather than using callbacks. The API is accessible via require('node:stream/promises') or require('node:stream').promises.
+
+stream.pipeline(source[, ...transforms], destination[, options])#
+stream.pipeline(streams[, options])#
+Added in: v15.0.0
+streams <Stream[]> | <Iterable[]> | <AsyncIterable[]> | <Function[]>
+source <Stream> | <Iterable> | <AsyncIterable> | <Function>
+Returns: <Promise> | <AsyncIterable>
+...transforms <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+destination <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+options <Object>
+signal <AbortSignal>
+end <boolean>
+Returns: <Promise> Fulfills when the pipeline is complete.
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+To use an AbortSignal, pass it inside an options object, as the last argument. When the signal is aborted, destroy will be called on the underlying pipeline, with an AbortError.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  const ac = new AbortController();
+  const signal = ac.signal;
+
+  setImmediate(() => ac.abort());
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+    { signal },
+  );
+}
+
+run().catch(console.error); // AbortErrorCOPY
+The pipeline API also supports async generators:
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('lowercase.txt'),
+    async function* (source, { signal }) {
+      source.setEncoding('utf8');  // Work with strings rather than `Buffer`s.
+      for await (const chunk of source) {
+        yield await processChunk(chunk, { signal });
+      }
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+Remember to handle the signal argument passed into the async generator. Especially in the case where the async generator is the source for the pipeline (i.e. first argument) or the pipeline will never complete.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    async function* ({ signal }) {
+      await someLongRunningfn({ signal });
+      yield 'asd';
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+The pipeline API provides callback version:
+
+stream.finished(stream[, options])#
+Added in: v15.0.0
+stream <Stream>
+options <Object>
+error <boolean> | <undefined>
+readable <boolean> | <undefined>
+writable <boolean> | <undefined>
+signal: <AbortSignal> | <undefined>
+Returns: <Promise> Fulfills when the stream is no longer readable or writable.
+const { finished } = require('node:stream/promises');
+const fs = require('node:fs');
+
+const rs = fs.createReadStream('archive.tar');
+
+async function run() {
+  await finished(rs);
+  console.log('Stream is done reading.');
+}
+
+run().catch(console.error);
+rs.resume(); // Drain the stream.COPY
+The finished API also provides a callback version.
+
+Object mode#
+All streams created by Node.js APIs operate exclusively on strings and Buffer (or Uint8Array) objects. It is possible, however, for stream implementations to work with other types of JavaScript values (with the exception of null, which serves a special purpose within streams). Such streams are considered to operate in "object mode".
+
+Stream instances are switched into object mode using the objectMode option when the stream is created. Attempting to switch an existing stream into object mode is not safe.
+
+Buffering#
+Both Writable and Readable streams will store data in an internal buffer.
+
+The amount of data potentially buffered depends on the highWaterMark option passed into the stream's constructor. For normal streams, the highWaterMark option specifies a total number of bytes. For streams operating in object mode, the highWaterMark specifies a total number of objects.
+
+Data is buffered in Readable streams when the implementation calls stream.push(chunk). If the consumer of the Stream does not call stream.read(), the data will sit in the internal queue until it is consumed.
+
+Once the total size of the internal read buffer reaches the threshold specified by highWaterMark, the stream will temporarily stop reading data from the underlying resource until the data currently buffered can be consumed (that is, the stream will stop calling the internal readable._read() method that is used to fill the read buffer).
+
+Data is buffered in Writable streams when the writable.write(chunk) method is called repeatedly. While the total size of the internal write buffer is below the threshold set by highWaterMark, calls to writable.write() will return true. Once the size of the internal buffer reaches or exceeds the highWaterMark, false will be returned.
+
+A key goal of the stream API, particularly the stream.pipe() method, is to limit the buffering of data to acceptable levels such that sources and destinations of differing speeds will not overwhelm the available memory.
+
+The highWaterMark option is a threshold, not a limit: it dictates the amount of data that a stream buffers before it stops asking for more data. It does not enforce a strict memory limitation in general. Specific stream implementations may choose to enforce stricter limits but doing so is optional.
+
+Because Duplex and Transform streams are both Readable and Writable, each maintains two separate internal buffers used for reading and writing, allowing each side to operate independently of the other while maintaining an appropriate and efficient flow of data. For example, net.Socket instances are Duplex streams whose Readable side allows consumption of data received from the socket and whose Writable side allows writing data to the socket. Because data may be written to the socket at a faster or slower rate than data is received, each side should operate (and buffer) independently of the other.
+
+The mechanics of the internal buffering are an internal implementation detail and may be changed at any time. However, for certain advanced implementations, the internal buffers can be retrieved using writable.writableBuffer or readable.readableBuffer. Use of these undocumented properties is discouraged.
+
+API for stream consumers#
+Almost all Node.js applications, no matter how simple, use streams in some manner. The following is an example of using streams in a Node.js application that implements an HTTP server:
+
+const http = require('node:http');
+
+const server = http.createServer((req, res) => {
+  // `req` is an http.IncomingMessage, which is a readable stream.
+  // `res` is an http.ServerResponse, which is a writable stream.
+
+  let body = '';
+  // Get the data as utf8 strings.
+  // If an encoding is not set, Buffer objects will be received.
+  req.setEncoding('utf8');
+
+  // Readable streams emit 'data' events once a listener is added.
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+
+  // The 'end' event indicates that the entire body has been received.
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      // Write back something interesting to the user:
+      res.write(typeof data);
+      res.end();
+    } catch (er) {
+      // uh oh! bad json!
+      res.statusCode = 400;
+      return res.end(`error: ${er.message}`);
+    }
+  });
+});
+
+server.listen(1337);
+
+// $ curl localhost:1337 -d "{}"
+// object
+// $ curl localhost:1337 -d "\"foo\""
+// string
+// $ curl localhost:1337 -d "not json"
+// error: Unexpected token 'o', "not json" is not valid JSON COPY
+Writable streams (such as res in the example) expose methods such as write() and end() that are used to write data onto the stream.
+
+Readable streams use the EventEmitter API for notifying application code when data is available to be read off the stream. That available data can be read from the stream in multiple ways.
+
+Both Writable and Readable streams use the EventEmitter API in various ways to communicate the current state of the stream.
+
+Duplex and Transform streams are both Writable and Readable.
+
+Applications that are either writing data to or consuming data from a stream are not required to implement the stream interfaces directly and will generally have no reason to call require('node:stream').
+
+Developers wishing to implement new types of streams should refer to the section API for stream implementers.
+
+Writable streams#
+Writable streams are an abstraction for a destination to which data is written.
+
+Examples of Writable streams include:
+
+HTTP requests, on the client
+HTTP responses, on the server
+fs write streams
+zlib streams
+crypto streams
+TCP sockets
+child process stdin
+process.stdout, process.stderr
+Some of these examples are actually Duplex streams that implement the Writable interface.
+
+All Writable streams implement the interface defined by the stream.Writable class.
+
+While specific instances of Writable streams may differ in various ways, all Writable streams follow the same fundamental usage pattern as illustrated in the example below:
+
+const myStream = getWritableStreamSomehow();
+myStream.write('some data');
+myStream.write('some more data');
+myStream.end('done writing data'); COPY
+Class: stream.Writable#
+Added in: v0.9.4
+Event: 'close'#
+History
+The 'close' event is emitted when the stream and any of its underlying resources (a file descriptor, for example) have been closed. The event indicates that no more events will be emitted, and no further computation will occur.
+
+A Writable stream will always emit the 'close' event if it is created with the emitClose option.
+
+Event: 'drain'
+The node:stream module is useful for creating new types of stream instances. It is usually not necessary to use the node:stream module to consume streams.
+
+Organization of this document#
+This document contains two primary sections and a third section for notes. The first section explains how to use existing streams within an application. The second section explains how to create new types of streams.
+
+Types of streams#
+There are four fundamental stream types within Node.js:
+
+Writable: streams to which data can be written (for example, fs.createWriteStream()).
+Readable: streams from which data can be read (for example, fs.createReadStream()).
+Duplex: streams that are both Readable and Writable (for example, net.Socket).
+Transform: Duplex streams that can modify or transform the data as it is written and read (for example, zlib.createDeflate()).
+Additionally, this module includes the utility functions stream.pipeline(), stream.finished(), stream.Readable.from() and stream.addAbortSignal().
+
+Streams Promises API#
+Added in: v15.0.0
+The stream/promises API provides an alternative set of asynchronous utility functions for streams that return Promise objects rather than using callbacks. The API is accessible via require('node:stream/promises') or require('node:stream').promises.
+
+stream.pipeline(source[, ...transforms], destination[, options])#
+stream.pipeline(streams[, options])#
+Added in: v15.0.0
+streams <Stream[]> | <Iterable[]> | <AsyncIterable[]> | <Function[]>
+source <Stream> | <Iterable> | <AsyncIterable> | <Function>
+Returns: <Promise> | <AsyncIterable>
+...transforms <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+destination <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+options <Object>
+signal <AbortSignal>
+end <boolean>
+Returns: <Promise> Fulfills when the pipeline is complete.
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+To use an AbortSignal, pass it inside an options object, as the last argument. When the signal is aborted, destroy will be called on the underlying pipeline, with an AbortError.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  const ac = new AbortController();
+  const signal = ac.signal;
+
+  setImmediate(() => ac.abort());
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+    { signal },
+  );
+}
+
+run().catch(console.error); // AbortErrorCOPY
+The pipeline API also supports async generators:
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('lowercase.txt'),
+    async function* (source, { signal }) {
+      source.setEncoding('utf8');  // Work with strings rather than `Buffer`s.
+      for await (const chunk of source) {
+        yield await processChunk(chunk, { signal });
+      }
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+Remember to handle the signal argument passed into the async generator. Especially in the case where the async generator is the source for the pipeline (i.e. first argument) or the pipeline will never complete.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    async function* ({ signal }) {
+      await someLongRunningfn({ signal });
+      yield 'asd';
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+The pipeline API provides callback version:
+
+stream.finished(stream[, options])#
+Added in: v15.0.0
+stream <Stream>
+options <Object>
+error <boolean> | <undefined>
+readable <boolean> | <undefined>
+writable <boolean> | <undefined>
+signal: <AbortSignal> | <undefined>
+Returns: <Promise> Fulfills when the stream is no longer readable or writable.
+const { finished } = require('node:stream/promises');
+const fs = require('node:fs');
+
+const rs = fs.createReadStream('archive.tar');
+
+async function run() {
+  await finished(rs);
+  console.log('Stream is done reading.');
+}
+
+run().catch(console.error);
+rs.resume(); // Drain the stream.COPY
+The finished API also provides a callback version.
+
+Object mode#
+All streams created by Node.js APIs operate exclusively on strings and Buffer (or Uint8Array) objects. It is possible, however, for stream implementations to work with other types of JavaScript values (with the exception of null, which serves a special purpose within streams). Such streams are considered to operate in "object mode".
+
+Stream instances are switched into object mode using the objectMode option when the stream is created. Attempting to switch an existing stream into object mode is not safe.
+
+Buffering#
+Both Writable and Readable streams will store data in an internal buffer.
+
+The amount of data potentially buffered depends on the highWaterMark option passed into the stream's constructor. For normal streams, the highWaterMark option specifies a total number of bytes. For streams operating in object mode, the highWaterMark specifies a total number of objects.
+
+Data is buffered in Readable streams when the implementation calls stream.push(chunk). If the consumer of the Stream does not call stream.read(), the data will sit in the internal queue until it is consumed.
+
+Once the total size of the internal read buffer reaches the threshold specified by highWaterMark, the stream will temporarily stop reading data from the underlying resource until the data currently buffered can be consumed (that is, the stream will stop calling the internal readable._read() method that is used to fill the read buffer).
+
+Data is buffered in Writable streams when the writable.write(chunk) method is called repeatedly. While the total size of the internal write buffer is below the threshold set by highWaterMark, calls to writable.write() will return true. Once the size of the internal buffer reaches or exceeds the highWaterMark, false will be returned.
+
+A key goal of the stream API, particularly the stream.pipe() method, is to limit the buffering of data to acceptable levels such that sources and destinations of differing speeds will not overwhelm the available memory.
+
+The highWaterMark option is a threshold, not a limit: it dictates the amount of data that a stream buffers before it stops asking for more data. It does not enforce a strict memory limitation in general. Specific stream implementations may choose to enforce stricter limits but doing so is optional.
+
+Because Duplex and Transform streams are both Readable and Writable, each maintains two separate internal buffers used for reading and writing, allowing each side to operate independently of the other while maintaining an appropriate and efficient flow of data. For example, net.Socket instances are Duplex streams whose Readable side allows consumption of data received from the socket and whose Writable side allows writing data to the socket. Because data may be written to the socket at a faster or slower rate than data is received, each side should operate (and buffer) independently of the other.
+
+The mechanics of the internal buffering are an internal implementation detail and may be changed at any time. However, for certain advanced implementations, the internal buffers can be retrieved using writable.writableBuffer or readable.readableBuffer. Use of these undocumented properties is discouraged.
+
+API for stream consumers#
+Almost all Node.js applications, no matter how simple, use streams in some manner. The following is an example of using streams in a Node.js application that implements an HTTP server:
+
+const http = require('node:http');
+
+const server = http.createServer((req, res) => {
+  // `req` is an http.IncomingMessage, which is a readable stream.
+  // `res` is an http.ServerResponse, which is a writable stream.
+
+  let body = '';
+  // Get the data as utf8 strings.
+  // If an encoding is not set, Buffer objects will be received.
+  req.setEncoding('utf8');
+
+  // Readable streams emit 'data' events once a listener is added.
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+
+  // The 'end' event indicates that the entire body has been received.
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      // Write back something interesting to the user:
+      res.write(typeof data);
+      res.end();
+    } catch (er) {
+      // uh oh! bad json!
+      res.statusCode = 400;
+      return res.end(`error: ${er.message}`);
+    }
+  });
+});
+
+server.listen(1337);
+
+// $ curl localhost:1337 -d "{}"
+// object
+// $ curl localhost:1337 -d "\"foo\""
+// string
+// $ curl localhost:1337 -d "not json"
+// error: Unexpected token 'o', "not json" is not valid JSON COPY
+Writable streams (such as res in the example) expose methods such as write() and end() that are used to write data onto the stream.
+
+Readable streams use the EventEmitter API for notifying application code when data is available to be read off the stream. That available data can be read from the stream in multiple ways.
+
+Both Writable and Readable streams use the EventEmitter API in various ways to communicate the current state of the stream.
+
+Duplex and Transform streams are both Writable and Readable.
+
+Applications that are either writing data to or consuming data from a stream are not required to implement the stream interfaces directly and will generally have no reason to call require('node:stream').
+
+Developers wishing to implement new types of streams should refer to the section API for stream implementers.
+
+Writable streams#
+Writable streams are an abstraction for a destination to which data is written.
+
+Examples of Writable streams include:
+
+HTTP requests, on the client
+HTTP responses, on the server
+fs write streams
+zlib streams
+crypto streams
+TCP sockets
+child process stdin
+process.stdout, process.stderr
+Some of these examples are actually Duplex streams that implement the Writable interface.
+
+All Writable streams implement the interface defined by the stream.Writable class.
+
+While specific instances of Writable streams may differ in various ways, all Writable streams follow the same fundamental usage pattern as illustrated in the example below:
+
+const myStream = getWritableStreamSomehow();
+myStream.write('some data');
+myStream.write('some more data');
+myStream.end('done writing data'); COPY
+Class: stream.Writable#
+Added in: v0.9.4
+Event: 'close'#
+History
+The 'close' event is emitted when the stream and any of its underlying resources (a file descriptor, for example) have been closed. The event indicates that no more events will be emitted, and no further computation will occur.
+
+A Writable stream will always emit the 'close' event if it is created with the emitClose option.
+
+Event: 'drain'
+The node:stream module is useful for creating new types of stream instances. It is usually not necessary to use the node:stream module to consume streams.
+
+Organization of this document#
+This document contains two primary sections and a third section for notes. The first section explains how to use existing streams within an application. The second section explains how to create new types of streams.
+
+Types of streams#
+There are four fundamental stream types within Node.js:
+
+Writable: streams to which data can be written (for example, fs.createWriteStream()).
+Readable: streams from which data can be read (for example, fs.createReadStream()).
+Duplex: streams that are both Readable and Writable (for example, net.Socket).
+Transform: Duplex streams that can modify or transform the data as it is written and read (for example, zlib.createDeflate()).
+Additionally, this module includes the utility functions stream.pipeline(), stream.finished(), stream.Readable.from() and stream.addAbortSignal().
+
+Streams Promises API#
+Added in: v15.0.0
+The stream/promises API provides an alternative set of asynchronous utility functions for streams that return Promise objects rather than using callbacks. The API is accessible via require('node:stream/promises') or require('node:stream').promises.
+
+stream.pipeline(source[, ...transforms], destination[, options])#
+stream.pipeline(streams[, options])#
+Added in: v15.0.0
+streams <Stream[]> | <Iterable[]> | <AsyncIterable[]> | <Function[]>
+source <Stream> | <Iterable> | <AsyncIterable> | <Function>
+Returns: <Promise> | <AsyncIterable>
+...transforms <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+destination <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+options <Object>
+signal <AbortSignal>
+end <boolean>
+Returns: <Promise> Fulfills when the pipeline is complete.
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+To use an AbortSignal, pass it inside an options object, as the last argument. When the signal is aborted, destroy will be called on the underlying pipeline, with an AbortError.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  const ac = new AbortController();
+  const signal = ac.signal;
+
+  setImmediate(() => ac.abort());
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+    { signal },
+  );
+}
+
+run().catch(console.error); // AbortErrorCOPY
+The pipeline API also supports async generators:
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('lowercase.txt'),
+    async function* (source, { signal }) {
+      source.setEncoding('utf8');  // Work with strings rather than `Buffer`s.
+      for await (const chunk of source) {
+        yield await processChunk(chunk, { signal });
+      }
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+Remember to handle the signal argument passed into the async generator. Especially in the case where the async generator is the source for the pipeline (i.e. first argument) or the pipeline will never complete.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    async function* ({ signal }) {
+      await someLongRunningfn({ signal });
+      yield 'asd';
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+The pipeline API provides callback version:
+
+stream.finished(stream[, options])#
+Added in: v15.0.0
+stream <Stream>
+options <Object>
+error <boolean> | <undefined>
+readable <boolean> | <undefined>
+writable <boolean> | <undefined>
+signal: <AbortSignal> | <undefined>
+Returns: <Promise> Fulfills when the stream is no longer readable or writable.
+const { finished } = require('node:stream/promises');
+const fs = require('node:fs');
+
+const rs = fs.createReadStream('archive.tar');
+
+async function run() {
+  await finished(rs);
+  console.log('Stream is done reading.');
+}
+
+run().catch(console.error);
+rs.resume(); // Drain the stream.COPY
+The finished API also provides a callback version.
+
+Object mode#
+All streams created by Node.js APIs operate exclusively on strings and Buffer (or Uint8Array) objects. It is possible, however, for stream implementations to work with other types of JavaScript values (with the exception of null, which serves a special purpose within streams). Such streams are considered to operate in "object mode".
+
+Stream instances are switched into object mode using the objectMode option when the stream is created. Attempting to switch an existing stream into object mode is not safe.
+
+Buffering#
+Both Writable and Readable streams will store data in an internal buffer.
+
+The amount of data potentially buffered depends on the highWaterMark option passed into the stream's constructor. For normal streams, the highWaterMark option specifies a total number of bytes. For streams operating in object mode, the highWaterMark specifies a total number of objects.
+
+Data is buffered in Readable streams when the implementation calls stream.push(chunk). If the consumer of the Stream does not call stream.read(), the data will sit in the internal queue until it is consumed.
+
+Once the total size of the internal read buffer reaches the threshold specified by highWaterMark, the stream will temporarily stop reading data from the underlying resource until the data currently buffered can be consumed (that is, the stream will stop calling the internal readable._read() method that is used to fill the read buffer).
+
+Data is buffered in Writable streams when the writable.write(chunk) method is called repeatedly. While the total size of the internal write buffer is below the threshold set by highWaterMark, calls to writable.write() will return true. Once the size of the internal buffer reaches or exceeds the highWaterMark, false will be returned.
+
+A key goal of the stream API, particularly the stream.pipe() method, is to limit the buffering of data to acceptable levels such that sources and destinations of differing speeds will not overwhelm the available memory.
+
+The highWaterMark option is a threshold, not a limit: it dictates the amount of data that a stream buffers before it stops asking for more data. It does not enforce a strict memory limitation in general. Specific stream implementations may choose to enforce stricter limits but doing so is optional.
+
+Because Duplex and Transform streams are both Readable and Writable, each maintains two separate internal buffers used for reading and writing, allowing each side to operate independently of the other while maintaining an appropriate and efficient flow of data. For example, net.Socket instances are Duplex streams whose Readable side allows consumption of data received from the socket and whose Writable side allows writing data to the socket. Because data may be written to the socket at a faster or slower rate than data is received, each side should operate (and buffer) independently of the other.
+
+The mechanics of the internal buffering are an internal implementation detail and may be changed at any time. However, for certain advanced implementations, the internal buffers can be retrieved using writable.writableBuffer or readable.readableBuffer. Use of these undocumented properties is discouraged.
+
+API for stream consumers#
+Almost all Node.js applications, no matter how simple, use streams in some manner. The following is an example of using streams in a Node.js application that implements an HTTP server:
+
+const http = require('node:http');
+
+const server = http.createServer((req, res) => {
+  // `req` is an http.IncomingMessage, which is a readable stream.
+  // `res` is an http.ServerResponse, which is a writable stream.
+
+  let body = '';
+  // Get the data as utf8 strings.
+  // If an encoding is not set, Buffer objects will be received.
+  req.setEncoding('utf8');
+
+  // Readable streams emit 'data' events once a listener is added.
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+
+  // The 'end' event indicates that the entire body has been received.
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      // Write back something interesting to the user:
+      res.write(typeof data);
+      res.end();
+    } catch (er) {
+      // uh oh! bad json!
+      res.statusCode = 400;
+      return res.end(`error: ${er.message}`);
+    }
+  });
+});
+
+server.listen(1337);
+
+// $ curl localhost:1337 -d "{}"
+// object
+// $ curl localhost:1337 -d "\"foo\""
+// string
+// $ curl localhost:1337 -d "not json"
+// error: Unexpected token 'o', "not json" is not valid JSON COPY
+Writable streams (such as res in the example) expose methods such as write() and end() that are used to write data onto the stream.
+
+Readable streams use the EventEmitter API for notifying application code when data is available to be read off the stream. That available data can be read from the stream in multiple ways.
+
+Both Writable and Readable streams use the EventEmitter API in various ways to communicate the current state of the stream.
+
+Duplex and Transform streams are both Writable and Readable.
+
+Applications that are either writing data to or consuming data from a stream are not required to implement the stream interfaces directly and will generally have no reason to call require('node:stream').
+
+Developers wishing to implement new types of streams should refer to the section API for stream implementers.
+
+Writable streams#
+Writable streams are an abstraction for a destination to which data is written.
+
+Examples of Writable streams include:
+
+HTTP requests, on the client
+HTTP responses, on the server
+fs write streams
+zlib streams
+crypto streams
+TCP sockets
+child process stdin
+process.stdout, process.stderr
+Some of these examples are actually Duplex streams that implement the Writable interface.
+
+All Writable streams implement the interface defined by the stream.Writable class.
+
+While specific instances of Writable streams may differ in various ways, all Writable streams follow the same fundamental usage pattern as illustrated in the example below:
+
+const myStream = getWritableStreamSomehow();
+myStream.write('some data');
+myStream.write('some more data');
+myStream.end('done writing data'); COPY
+Class: stream.Writable#
+Added in: v0.9.4
+Event: 'close'#
+History
+The 'close' event is emitted when the stream and any of its underlying resources (a file descriptor, for example) have been closed. The event indicates that no more events will be emitted, and no further computation will occur.
+
+A Writable stream will always emit the 'close' event if it is created with the emitClose option.
+
+Event: 'drain'
+The node:stream module is useful for creating new types of stream instances. It is usually not necessary to use the node:stream module to consume streams.
+
+Organization of this document#
+This document contains two primary sections and a third section for notes. The first section explains how to use existing streams within an application. The second section explains how to create new types of streams.
+
+Types of streams#
+There are four fundamental stream types within Node.js:
+
+Writable: streams to which data can be written (for example, fs.createWriteStream()).
+Readable: streams from which data can be read (for example, fs.createReadStream()).
+Duplex: streams that are both Readable and Writable (for example, net.Socket).
+Transform: Duplex streams that can modify or transform the data as it is written and read (for example, zlib.createDeflate()).
+Additionally, this module includes the utility functions stream.pipeline(), stream.finished(), stream.Readable.from() and stream.addAbortSignal().
+
+Streams Promises API#
+Added in: v15.0.0
+The stream/promises API provides an alternative set of asynchronous utility functions for streams that return Promise objects rather than using callbacks. The API is accessible via require('node:stream/promises') or require('node:stream').promises.
+
+stream.pipeline(source[, ...transforms], destination[, options])#
+stream.pipeline(streams[, options])#
+Added in: v15.0.0
+streams <Stream[]> | <Iterable[]> | <AsyncIterable[]> | <Function[]>
+source <Stream> | <Iterable> | <AsyncIterable> | <Function>
+Returns: <Promise> | <AsyncIterable>
+...transforms <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+destination <Stream> | <Function>
+source <AsyncIterable>
+Returns: <Promise> | <AsyncIterable>
+options <Object>
+signal <AbortSignal>
+end <boolean>
+Returns: <Promise> Fulfills when the pipeline is complete.
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+To use an AbortSignal, pass it inside an options object, as the last argument. When the signal is aborted, destroy will be called on the underlying pipeline, with an AbortError.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+const zlib = require('node:zlib');
+
+async function run() {
+  const ac = new AbortController();
+  const signal = ac.signal;
+
+  setImmediate(() => ac.abort());
+  await pipeline(
+    fs.createReadStream('archive.tar'),
+    zlib.createGzip(),
+    fs.createWriteStream('archive.tar.gz'),
+    { signal },
+  );
+}
+
+run().catch(console.error); // AbortErrorCOPY
+The pipeline API also supports async generators:
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    fs.createReadStream('lowercase.txt'),
+    async function* (source, { signal }) {
+      source.setEncoding('utf8');  // Work with strings rather than `Buffer`s.
+      for await (const chunk of source) {
+        yield await processChunk(chunk, { signal });
+      }
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+Remember to handle the signal argument passed into the async generator. Especially in the case where the async generator is the source for the pipeline (i.e. first argument) or the pipeline will never complete.
+
+const { pipeline } = require('node:stream/promises');
+const fs = require('node:fs');
+
+async function run() {
+  await pipeline(
+    async function* ({ signal }) {
+      await someLongRunningfn({ signal });
+      yield 'asd';
+    },
+    fs.createWriteStream('uppercase.txt'),
+  );
+  console.log('Pipeline succeeded.');
+}
+
+run().catch(console.error);COPY
+The pipeline API provides callback version:
+
+stream.finished(stream[, options])#
+Added in: v15.0.0
+stream <Stream>
+options <Object>
+error <boolean> | <undefined>
+readable <boolean> | <undefined>
+writable <boolean> | <undefined>
+signal: <AbortSignal> | <undefined>
+Returns: <Promise> Fulfills when the stream is no longer readable or writable.
+const { finished } = require('node:stream/promises');
+const fs = require('node:fs');
+
+const rs = fs.createReadStream('archive.tar');
+
+async function run() {
+  await finished(rs);
+  console.log('Stream is done reading.');
+}
+
+run().catch(console.error);
+rs.resume(); // Drain the stream.COPY
+The finished API also provides a callback version.
+
+Object mode#
+All streams created by Node.js APIs operate exclusively on strings and Buffer (or Uint8Array) objects. It is possible, however, for stream implementations to work with other types of JavaScript values (with the exception of null, which serves a special purpose within streams). Such streams are considered to operate in "object mode".
+
+Stream instances are switched into object mode using the objectMode option when the stream is created. Attempting to switch an existing stream into object mode is not safe.
+
+Buffering#
+Both Writable and Readable streams will store data in an internal buffer.
+
+The amount of data potentially buffered depends on the highWaterMark option passed into the stream's constructor. For normal streams, the highWaterMark option specifies a total number of bytes. For streams operating in object mode, the highWaterMark specifies a total number of objects.
+
+Data is buffered in Readable streams when the implementation calls stream.push(chunk). If the consumer of the Stream does not call stream.read(), the data will sit in the internal queue until it is consumed.
+
+Once the total size of the internal read buffer reaches the threshold specified by highWaterMark, the stream will temporarily stop reading data from the underlying resource until the data currently buffered can be consumed (that is, the stream will stop calling the internal readable._read() method that is used to fill the read buffer).
+
+Data is buffered in Writable streams when the writable.write(chunk) method is called repeatedly. While the total size of the internal write buffer is below the threshold set by highWaterMark, calls to writable.write() will return true. Once the size of the internal buffer reaches or exceeds the highWaterMark, false will be returned.
+
+A key goal of the stream API, particularly the stream.pipe() method, is to limit the buffering of data to acceptable levels such that sources and destinations of differing speeds will not overwhelm the available memory.
+
+The highWaterMark option is a threshold, not a limit: it dictates the amount of data that a stream buffers before it stops asking for more data. It does not enforce a strict memory limitation in general. Specific stream implementations may choose to enforce stricter limits but doing so is optional.
+
+Because Duplex and Transform streams are both Readable and Writable, each maintains two separate internal buffers used for reading and writing, allowing each side to operate independently of the other while maintaining an appropriate and efficient flow of data. For example, net.Socket instances are Duplex streams whose Readable side allows consumption of data received from the socket and whose Writable side allows writing data to the socket. Because data may be written to the socket at a faster or slower rate than data is received, each side should operate (and buffer) independently of the other.
+
+The mechanics of the internal buffering are an internal implementation detail and may be changed at any time. However, for certain advanced implementations, the internal buffers can be retrieved using writable.writableBuffer or readable.readableBuffer. Use of these undocumented properties is discouraged.
+
+API for stream consumers#
+Almost all Node.js applications, no matter how simple, use streams in some manner. The following is an example of using streams in a Node.js application that implements an HTTP server:
+
+const http = require('node:http');
+
+const server = http.createServer((req, res) => {
+  // `req` is an http.IncomingMessage, which is a readable stream.
+  // `res` is an http.ServerResponse, which is a writable stream.
+
+  let body = '';
+  // Get the data as utf8 strings.
+  // If an encoding is not set, Buffer objects will be received.
+  req.setEncoding('utf8');
+
+  // Readable streams emit 'data' events once a listener is added.
+  req.on('data', (chunk) => {
+    body += chunk;
+  });
+
+  // The 'end' event indicates that the entire body has been received.
+  req.on('end', () => {
+    try {
+      const data = JSON.parse(body);
+      // Write back something interesting to the user:
+      res.write(typeof data);
+      res.end();
+    } catch (er) {
+      // uh oh! bad json!
+      res.statusCode = 400;
+      return res.end(`error: ${er.message}`);
+    }
+  });
+});
+
+server.listen(1337);
+
+// $ curl localhost:1337 -d "{}"
+// object
+// $ curl localhost:1337 -d "\"foo\""
+// string
+// $ curl localhost:1337 -d "not json"
+// error: Unexpected token 'o', "not json" is not valid JSON COPY
+Writable streams (such as res in the example) expose methods such as write() and end() that are used to write data onto the stream.
+
+Readable streams use the EventEmitter API for notifying application code when data is available to be read off the stream. That available data can be read from the stream in multiple ways.
+
+Both Writable and Readable streams use the EventEmitter API in various ways to communicate the current state of the stream.
+
+Duplex and Transform streams are both Writable and Readable.
+
+Applications that are either writing data to or consuming data from a stream are not required to implement the stream interfaces directly and will generally have no reason to call require('node:stream').
+
+Developers wishing to implement new types of streams should refer to the section API for stream implementers.
+
+Writable streams#
+Writable streams are an abstraction for a destination to which data is written.
+
+Examples of Writable streams include:
+
+HTTP requests, on the client
+HTTP responses, on the server
+fs write streams
+zlib streams
+crypto streams
+TCP sockets
+child process stdin
+process.stdout, process.stderr
+Some of these examples are actually Duplex streams that implement the Writable interface.
+
+All Writable streams implement the interface defined by the stream.Writable class.
+
+While specific instances of Writable streams may differ in various ways, all Writable streams follow the same fundamental usage pattern as illustrated in the example below:
+
+const myStream = getWritableStreamSomehow();
+myStream.write('some data');
+myStream.write('some more data');
+myStream.end('done writing data'); COPY
+Class: stream.Writable#
+Added in: v0.9.4
+Event: 'close'#
+History
+The 'close' event is emitted when the stream and any of its underlying resources (a file descriptor, for example) have been closed. The event indicates that no more events will be emitted, and no further computation will occur.
+
+A Writable stream will always emit the 'close' event if it is created with the emitClose option.
+
+
+Event: 'drain'
+---CHUNK END---

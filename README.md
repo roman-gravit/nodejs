@@ -27,3 +27,28 @@ The following variables may appear to be global but are not. They exist only in 
 
  - **require()**
 
+
+##  fs
+
+[todo]
+
+##  Events
+
+[todo]
+
+
+##  Streams
+
+A stream is an abstract interface for working with streaming data in Node.js. 
+
+Streams can be readable, writable, or both. All streams are instances of EventEmitter.
+
+There are four fundamental stream types within Node.js:
+
+ - **Writable:** streams to which data can be written (for example, fs.createWriteStream()).
+
+ - **Readable:** streams from which data can be read (for example, fs.createReadStream()).
+
+ - **Duplex:** streams that are both Readable and Writable (for example, net.Socket).
+
+ - **Transform:** Duplex streams that can modify or transform the data as it is written and read (for example, zlib.createDeflate()).
