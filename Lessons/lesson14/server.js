@@ -3,6 +3,8 @@ const path = require("path");
 const morgan = require("morgan");
 const mongoose = require("mongoose");
 const Post = require("./models/post");
+const Contact = require("./models/contacts");
+const methodOverride = require('method-override');
 
 const app = express();
 
@@ -12,7 +14,7 @@ const app = express();
 app.set("view engine", "ejs")
 
 const PORT = 3000;
-const db = "mongodb+srv://roman:791YKRRd11@atlascluster.ukhzxzu.mongodb.net/?retryWrites=true&w=majority&appName=AtlasCluster";
+const db = "mongodb+srv://roman:791YKRRd@atlascluster.ukhzxzu.mongodb.net/?retryWrites=true&w=majority&appName=AtlasCluster";
 
 const CreatePath = (page) => path.resolve(__dirname, 'ejs-views', `${page}.ejs`);
 
@@ -42,6 +44,8 @@ app.use(morgan(':method :url :status :res[content-length] - :response-time ms'))
 
 app.use(express.static("./lessons/lesson12/styles"));
 
+app.use(methodOverride('_method'));
+
 // express.urlencoded([options])
 // This is a built-in middleware function in Express. It parses incoming requests with urlencoded payloads and is based on body-parser.
 // Returns middleware that only parses urlencoded bodies and only looks at requests where the Content-Type header matches the type option. 
@@ -62,38 +66,77 @@ app.get("/", (req, response) => {
 	response.render(CreatePath("index"), { title });
 })
 
-app.get("/contacts", (req, response) => {
+app.get("/contacts", (req, res) => {
 	const title = "Contacts";
-	const contacts = [
-		{ name: 'Mike' },
-		{ name: 'John' },
-		{ name: 'Anna' },
-	  ];
-	response.render(CreatePath("contacts"), { title, contacts });
+
+	Contact
+		.find()
+		.then((contacts) => res.render(CreatePath("contacts"), { title, contacts }))
+		.catch((error) => {
+			console.log(`contacts: error: ${error}`);
+			res.render(CreatePath("error"), { title: "Error" });
+	})
+
 })
 
-app.get("/posts/:id", (req, response) => {
+app.get("/posts/:id", (req, res) => {
 	const title = "Post";
-	const post = {
-		id: '1', 
-		text: 'Hello: Lorem ipsum dolor sit amet consectetur adipisicing elit. Sapiente quidem provident, dolores, vero laboriosam nemo mollitia impedit unde fugit sint eveniet, minima odio ipsum sed recusandae aut iste aspernatur dolorem.',
-		title: 'Post title new',
-		date: '16.04.2024',
-		author: 'Mike',
-	};
-	response.render(CreatePath("post"), { title, post } );
+	Post
+		.findById(req.params.id)
+		.then((post) => res.render(CreatePath("post"), { title, post}))
+		.catch((error) => {
+			console.log(`post:id: error: ${error}`);
+			res.render(CreatePath("error"), { title: "Error" });
+	})
 })
 
-app.get("/posts", (req, response) => {
+app.delete("/posts/:id", (req, res) => {
+	const title = "Post";
+	Post
+		.findByIdAndDelete(req.params.id)
+		.then((result) => {
+			res.sendStatus(200);
+		})
+		.catch((error) => {
+			console.log(`post:id: error: ${error}`);
+			res.render(CreatePath("error"), { title: "Error" });
+	})
+})
+
+app.get('/edit/:id', (req, res) => {
+	const title = 'Edit Post';
+	Post
+	  .findById(req.params.id)
+	  .then(post => res.render(CreatePath('edit-post'), { post, title }))
+	  .catch((error) => {
+		console.log(error);
+		res.render(CreatePath('error'), { title: 'Error' });
+	});
+});
+  
+app.put('/edit/:id', (req, res) => {
+	const { title, author, text } = req.body;
+	const { id } = req.params;
+	Post
+	  .findByIdAndUpdate(id, { title, author, text })
+	  .then((result) => res.redirect(`/posts/${id}`))
+	  .catch((error) => {
+		console.log(error);
+		res.render(CreatePath('error'), { title: 'Error' });
+	});
+});
+
+app.get("/posts", (req, res) => {
 	const title = "Posts";
-	const posts = [{
-		id: '1', 
-		text: 'Hello: Lorem ipsum dolor sit amet consectetur adipisicing elit. Sapiente quidem provident, dolores, vero laboriosam nemo mollitia impedit unde fugit sint eveniet, minima odio ipsum sed recusandae aut iste aspernatur dolorem.',
-		title: 'Post title new',
-		date: '16.04.2024',
-		author: 'Mike',
-	}];
-	response.render(CreatePath("posts"), { title, posts });
+
+	Post
+		.find()
+		.sort({createdAt: -1})
+		.then((posts) => res.render(CreatePath("posts"), { title, posts }))
+		.catch((error) => {
+			console.log(`posts: error: ${error}`);
+			res.render(CreatePath("error"), { title: "Error" });
+	})
 })
 
 app.post("/add-post", (req, res) => {
@@ -101,20 +144,11 @@ app.post("/add-post", (req, res) => {
 	const post = new Post({ title, author, text});
 	post
 		.save()
-		.then((result) => res.send(result))
+		.then((result) => res.redirect("/posts"))
 		.catch((error) => {
 			console.log(`add-post: error: ${error}`);
 			res.render(CreatePath("error"), { title: "Error" });
 		})
-	
-	/*const post = {
-		id: new Date(), 
-		text: text,
-		title: title,
-		date: (new Date()).toLocaleDateString(),
-		author: author
-	};
-	res.render(CreatePath("post"), { title, post } );*/
 })
 
 app.get("/add-post", (req, response) => {
