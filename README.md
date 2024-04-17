@@ -117,6 +117,7 @@ This file is intended to be committed into source repositories, and serves vario
 Here, foo is installed with version 2.3.0 [major.minor.patch]. 
 
 The caret symbol tells something more:
+
 ^2.3.0 — [Caret Symbol] This tells npm to upgrade to minor and patch versions, but not major versions. 
           So, basically 2.3.4, 2.3.9, 2.4.5, 2.8 but not 3.0.0 onwards. (Upgrade to minor and patch, but not major)
 
@@ -158,6 +159,21 @@ Steps to implement:
 - Create a EJS template file named index.ejs
 
 - Then create a route to render the index.ejs file. 
+
+
+##  Middleware
+
+Middleware functions are functions that have access to the request object (req), the response object (res), and the next middleware function in the application’s request-response cycle. The next middleware function is commonly denoted by a variable named next.
+
+Middleware functions can perform the following tasks:
+
+ - Execute any code.
+
+ - Make changes to the request and the response objects.
+
+ - End the request-response cycle.
+
+ - Call the next middleware function in the stack.
 
 
 ##  Global Node objects 
