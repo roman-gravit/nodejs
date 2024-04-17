@@ -1,6 +1,8 @@
 const express = require("express");
 const path = require("path");
 const morgan = require("morgan");
+const mongoose = require("mongoose");
+const Post = require("./models/post");
 
 const app = express();
 
@@ -10,7 +12,15 @@ const app = express();
 app.set("view engine", "ejs")
 
 const PORT = 3000;
+const db = "mongodb+srv://roman:791YKRRd11@atlascluster.ukhzxzu.mongodb.net/?retryWrites=true&w=majority&appName=AtlasCluster";
+
 const CreatePath = (page) => path.resolve(__dirname, 'ejs-views', `${page}.ejs`);
+
+
+mongoose
+  .connect(db)
+  .then((res) => console.log('Connected to DB'))
+  .catch((error) => console.log(error));
 
 app.listen(PORT, (error) =>{
 	if(error) {
@@ -88,14 +98,23 @@ app.get("/posts", (req, response) => {
 
 app.post("/add-post", (req, res) => {
 	const { title, author, text } = req.body;
-	const post = {
+	const post = new Post({ title, author, text});
+	post
+		.save()
+		.then((result) => res.send(result))
+		.catch((error) => {
+			console.log(`add-post: error: ${error}`);
+			res.render(CreatePath("error"), { title: "Error" });
+		})
+	
+	/*const post = {
 		id: new Date(), 
 		text: text,
 		title: title,
 		date: (new Date()).toLocaleDateString(),
 		author: author
 	};
-	res.render(CreatePath("post"), { title, post } );
+	res.render(CreatePath("post"), { title, post } );*/
 })
 
 app.get("/add-post", (req, response) => {
