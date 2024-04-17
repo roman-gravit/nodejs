@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "description": "nodejs course",
   "scripts": {
-    "dev": "nodemon ./lessons/lesson14/server.js",
-    "start": "nodemon ./lessons/lesso14/server.js",
+    "dev": "nodemon ./lessons/lesson18/server.js",
+    "start": "nodemon ./lessons/lesso18/server.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "author": "",
