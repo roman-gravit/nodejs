@@ -252,3 +252,31 @@ There are four fundamental stream types within Node.js:
 				cross-env is used to set environment variables *inline when running node commands*.
 
 - **dotenv** will spawn the process with the environment variables based on a .env file.
+
+##  *cluster* module
+
+To fully utilize the potential of multi-core systems and enhance the performance of Node.js applications, 
+
+we can implement clustering using the built-in cluster module. Clustering allows us to create multiple worker processes to 
+
+handle incoming requests, resulting in improved performance and better utilization of system resources.
+
+Clustering in Node.js involves creating multiple worker processes that share the incoming workload. 
+
+Each worker process runs in its own event loop, utilizing the available CPU cores. 
+
+The master process manages the worker processes, distributes incoming requests, and handles process failures.
+
+Benefits of Clustering:
+
+ - **Improved Performance:** Clustering enables parallel processing of requests across multiple cores, leading to improved performance and 
+ 	
+	responsiveness of the application. It allows for better utilization of available system resources, especially on machines with multiple CPU cores.
+
+ - **Scalability:** Clustering enhances the scalability of Node.js applications by handling concurrent requests in parallel. 
+ 
+    As the workload increases, additional worker processes can be created dynamically to distribute the load effectively.
+
+ - **Fault Tolerance:** If a worker process crashes or becomes unresponsive, the master process can detect the failure and restart the worker 
+ 
+ 	process automatically. This fault tolerance ensures that the application remains available even in the presence of process failures.

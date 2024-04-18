@@ -107,6 +107,61 @@ const path = require("path");
 	//fs.readFile  encoding: utf-8
 }
 
+// Task:
+// 1. pass string via env
+// 2. write it to file  first.txt
+// 3. read file 
+// 4. count words count in the file
+// 5. write these words to the new file count.txt
+// 6. delete first file
 {
 
+	const writeFile = async(path, data) => {
+		return new Promise((resolve, reject) =>{
+			fs.writeFile(path, data, (err)=> {
+				if(err) {
+					return reject(err.message);
+				}
+				return resolve();
+			})
+		})
+	}
+
+	const readFile = async(path) => {
+		return new Promise((resolve, reject) =>{
+			fs.readFile(path, {encoding: "utf8"}, (err, data)=> {
+				if(err) {
+					return reject(err.message);
+				}
+				return resolve(data);
+			})
+		})
+	}
+
+	const daleteFile = async(path) => {
+		return new Promise((resolve, reject) =>{
+			fs.rm(path, (err)=> {
+				if(err) {
+					return reject(err.message);
+				}
+				return resolve();
+			})
+		})
+	}
+
+	// Loads `.env` file contents
+	require("dotenv").config();
+	const text = process.env.TEXT || "";
+
+	const first_file_path = path.resolve(__dirname, "first.txt");
+	const count_file_path = path.resolve(__dirname, "count.txt");
+
+	writeFile(first_file_path, text)
+		.then(() => readFile(first_file_path) )
+		.then((data) => data.split(" ").length )
+		.then((count) => writeFile(count_file_path, `words count: ${count}`) )
+		.then(() => daleteFile(first_file_path) )
+		.catch((err) => {
+			console.log(err);
+		})
 }
