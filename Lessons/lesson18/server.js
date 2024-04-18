@@ -1,30 +1,33 @@
 const express = require("express");
+const chalk = require('chalk');
 const CreatePath = require("./helpers/create-path");
 const morgan = require("morgan");
 const mongoose = require("mongoose");
 const methodOverride = require('method-override');
 const postRoutes = require("./routes/post-routes");
 const contactRoutes = require("./routes/contact-routes");
-
 const postApiRoutes = require("./routes/api-post-routes");
+
+const errorMsg = chalk.bgKeyword('white').redBright;
+const successMsg = chalk.bgKeyword('green').white;
 
 const app = express();
 
 app.set("view engine", "ejs")
 
 const PORT = 3000;
-const db = "mongodb+srv://roman:791YKRRd@atlascluster.ukhzxzu.mongodb.net/?retryWrites=true&w=majority&appName=AtlasCluster";
+const db = "mongodb+srv://roman:791YKRRd11@atlascluster.ukhzxzu.mongodb.net/?retryWrites=true&w=majority&appName=AtlasCluster";
 
 mongoose
   .connect(db)
-  .then((res) => console.log('Connected to DB'))
-  .catch((error) => console.log(error));
+  .then((res) => console.log(successMsg('Connected to DB')))
+  .catch((error) => console.log(errorMsg(error)));
 
 app.listen(PORT, (error) =>{
 	if(error) {
-		console.log(`Error listening port: ${error}`);
+		console.log(errorMsg(`Error listening port: ${error}`));
 	} else {
-		console.log(`Listening port ${PORT}`);
+		console.log(successMsg(`Listening port ${PORT}`));
 	}
 });
 
