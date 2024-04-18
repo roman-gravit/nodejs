@@ -1,11 +1,34 @@
 # NodeJS
 
-Node.js is a cross-platform, open-source JavaScript runtime environment that can run on Windows, Linux, Unix, macOS, and more. 
+Node.js is a cross-platform, open-source JavaScript runtime environment with an event-driven, non-blocking I/O model 
+that can run on Windows, Linux, Unix, macOS, and more. 
 
 Node.js runs on the V8 JavaScript engine, and executes JavaScript code outside a web browser. 
 
 Node.js lets developers use JavaScript to write command line tools and for server-side scripting.
 
+Two main parts:
+
+ - **V8 engine:** translate JS code to binary code, written in c++.
+
+ - **Libuv library:**  cross platform I/O(filesys) and Event loop. But inside Libuv uses up ti 4 threads. Written in C.
+
+*Non-blocking I/O*: Traditional I/O operations, such as reading from files or making network requests, are often blocked, 
+which stops the program’s execution until the operation is completed. In contrast, Node JS employs non-blocking I/O, 
+where the execution of the program continues without waiting for the I/O operation to finish. When the operation is completed, 
+a callback is triggered to handle the result.
+
+*Event loop:* Node JS operates within a single thread and utilizes the event loop to handle events and execute callbacks. 
+The event loop is the core of the event-driven architecture, and it continuously checks for pending events in a loop.
+When a new event is registered, it is added to the event queue. The event loop picks up these events from the queue and 
+executes their corresponding callbacks individually. If a callback takes time to complete, it won’t block the entire program, 
+instead, other events can be processed in the meantime.
+
+https://habr.com/ru/articles/479062/
+
+https://medium.com/@aignbyf/node-js-event-loop-%D0%BA%D0%BE%D0%BF%D0%BD%D1%83%D1%82%D1%8C-%D0%B3%D0%BB%D1%83%D0%B1%D0%B6%D0%B5-94c12bb32d0c
+
+http://design-pattern.ru/patterns/reactor.html
 
 ##  NPM
 
@@ -141,7 +164,7 @@ It provides mechanisms to:
 https://expressjs.com/en/4x/api.html
 
 
-##   Using template engines with Express
+##  Using template engines with Express
 
 A template engine enables you to use static template files in your application. At runtime, the template engine replaces variables 
 in a template file with actual values, and transforms the template into an HTML file sent to the client. 
@@ -221,3 +244,11 @@ There are four fundamental stream types within Node.js:
  - **Duplex:** streams that are both Readable and Writable (for example, net.Socket).
 
  - **Transform:** Duplex streams that can modify or transform the data as it is written and read (for example, zlib.createDeflate()).
+
+
+##  *cross-env* vs *dotenv* packages
+
+- **cross-env** is a CLI that will spawn a process for the command you give it with the environment variables set as you specify in the command.
+				cross-env is used to set environment variables *inline when running node commands*.
+
+- **dotenv** will spawn the process with the environment variables based on a .env file.
