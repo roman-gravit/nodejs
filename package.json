@@ -4,7 +4,7 @@
   "description": "nodejs course",
   "scripts": {
     "dev": "nodemon ./lessons/lesson18/server.js",
-    "start": "node ./course/path.js"
+    "start": "node ./course/file-system.js"
   },
   "author": "",
   "license": "ISC",
