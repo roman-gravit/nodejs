@@ -4,6 +4,8 @@ const CreatePath = require("./helpers/create-path");
 const morgan = require("morgan");
 const mongoose = require("mongoose");
 const methodOverride = require('method-override');
+require('dotenv').config();
+
 const postRoutes = require("./routes/post-routes");
 const contactRoutes = require("./routes/contact-routes");
 const postApiRoutes = require("./routes/api-post-routes");
@@ -15,19 +17,16 @@ const app = express();
 
 app.set("view engine", "ejs")
 
-const PORT = 3000;
-const db = "mongodb+srv://roman:791YKRRd11@atlascluster.ukhzxzu.mongodb.net/?retryWrites=true&w=majority&appName=AtlasCluster";
-
 mongoose
-  .connect(db)
+  .connect(process.env.MONGO_URL)
   .then((res) => console.log(successMsg('Connected to DB')))
   .catch((error) => console.log(errorMsg(error)));
 
-app.listen(PORT, (error) =>{
+app.listen(process.env.PORT, (error) =>{
 	if(error) {
 		console.log(errorMsg(`Error listening port: ${error}`));
 	} else {
-		console.log(successMsg(`Listening port ${PORT}`));
+		console.log(successMsg(`Listening port ${process.env.PORT}`));
 	}
 });
 
