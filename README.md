@@ -117,6 +117,9 @@ Example:
 }
 ```
 
+https://habr.com/ru/companies/ruvds/articles/423703/
+
+
 ##   *package-lock.json*
 
 package-lock.json is automatically generated for any operations where npm modifies either the node_modules tree, or package.json. 
@@ -131,6 +134,8 @@ This file is intended to be committed into source repositories, and serves vario
    guaranteed to install exactly the same dependencies.
 
  - Optimize the installation process by allowing npm to skip repeated metadata resolutions for previously-installed packages.
+
+https://habr.com/ru/companies/ruvds/articles/423703/
 
 
 ##  package version
@@ -222,11 +227,22 @@ The following variables may appear to be global but are not. They exist only in 
 
 ##  fs
 
-[todo]
+https://nodejs.org/docs/v20.12.1/api/fs.html#file-system
+
 
 ##  Events
 
-[todo]
+Much of the Node.js core API is built around an idiomatic asynchronous event-driven architecture in which certain kinds of objects (called "emitters") 
+emit named events that cause Function objects ("listeners") to be called.
+
+For instance: a net.Server object emits an event each time a peer connects to it; a fs.ReadStream emits an event when the file is opened; 
+a stream emits an event whenever data is available to be read.
+
+All objects that emit events are instances of the EventEmitter class. These objects expose an eventEmitter.on() function that allows one or more functions 
+to be attached to named events emitted by the object. Typically, event names are camel-cased strings but any valid JavaScript property key can be used.
+
+When the EventEmitter object emits an event, all of the functions attached to that specific event are called synchronously. 
+Any values returned by the called listeners are ignored and discarded.
 
 
 ##  Streams
