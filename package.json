@@ -3,8 +3,8 @@
   "version": "1.0.0",
   "description": "nodejs course",
   "scripts": {
-    "dev": "nodemon ./lessons/lesson18/server.js",
-    "start": "node ./course/mongo.js"
+    "dev": "nodemon ./course/index.js",
+    "start": "node ./course/index.js"
   },
   "author": "",
   "license": "ISC",
